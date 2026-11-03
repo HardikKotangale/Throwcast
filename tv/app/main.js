@@ -152,6 +152,13 @@ function pump(now) {
 }
 
 function onMessage(event) {
+  // One Mac at a time: whoever connected first keeps the TV until their cast ends. Anything from
+  // another connection is refused, so two Macs can never feed the player at once.
+  if (state.socket && event.target !== state.socket) {
+    event.target.onclose = event.target.onmessage = null;
+    event.target.close();
+    return;
+  }
   if (typeof event.data !== 'string') return onPacket(event.data);
   var message = JSON.parse(event.data);
   if (message.type === 'throwcast') {

@@ -34,15 +34,16 @@ public enum CastState: Equatable, Sendable {
 }
 
 public enum CastError: LocalizedError {
-    case noDisplay, noWindow, virtualDisplayFailed, timedOut, receiverMissing, windowHidden
+    case noDisplay, noWindow, virtualDisplayFailed, timedOut, receiverMissing, receiverNotOpened, windowHidden
 
     public var errorDescription: String? {
         switch self {
         case .noDisplay: "Couldn't find a display to capture."
         case .noWindow: "That window is no longer open."
         case .virtualDisplayFailed: "macOS refused the TV-sized display. Try This Screen instead."
-        case .timedOut: "The TV didn't connect. Open Throwcast on the TV and try again."
+        case .timedOut: "The TV didn't connect. If another Mac is casting to it, wait until it stops. Otherwise open Throwcast on the TV and try again."
         case .receiverMissing: "Throwcast isn't installed on this TV yet."
+        case .receiverNotOpened: "Couldn't open Throwcast on the TV. Open it from the TV's Apps screen, then try again."
         case .windowHidden: "Keep the browser window on your current desktop, not minimized, then try again."
         }
     }
@@ -88,6 +89,8 @@ public final class CastSession {
     private var stats = CastStats()
     private var timers: [DispatchSourceTimer] = []
     private var finished = false
+    private var captureStarted = false
+    private var tvSaidHello = false
     private let timerQueue = DispatchQueue(label: "throwcast.timers")
 
     public init(host: String, config: StreamConfig, source: CastSource) {
@@ -111,7 +114,7 @@ public final class CastSession {
         }
         startTimers()
         timerQueue.asyncAfter(deadline: .now() + 25) { [weak self] in
-            guard let self, self.capture == nil, !self.finished else { return }
+            guard let self, self.lock.withLock({ self.capture == nil && !self.finished }) else { return }
             self.finish(.failed(CastError.timedOut.localizedDescription))
         }
     }
@@ -173,16 +176,19 @@ public final class CastSession {
     public func stop() { finish(.stopped) }
     public func fail(_ message: String) { finish(.failed(message)) }
 
+    /// True once the TV app has said hello, which proves it's installed and running.
+    public var heardFromTV: Bool { lock.withLock { tvSaidHello } }
+
     private func finish(_ state: CastState) {
         guard lock.withLock({ let was = finished; finished = true; return !was }) else { return }
         timers.forEach { $0.cancel() }
         pacer?.cancel()
         server.stop()
-        lock.withLock { udp }?.stop()
-        let capture = capture
+        let (capture, encoder, udp) = lock.withLock { (self.capture, self.encoder, self.udp) }
+        udp?.stop()
         Task {
             await capture?.stop()
-            self.encoder?.invalidate()
+            encoder?.invalidate()
             self.virtualDisplay = nil
             self.onState?(state)
         }
@@ -191,13 +197,21 @@ public final class CastSession {
     private func handle(_ message: [String: Any]) {
         switch message["type"] as? String {
         case "hello":
+            lock.withLock { tvSaidHello = true }
             // UDP only if both ends speak it; an older TV app quietly gets TCP.
             if !(config.udp && message["udp"] as? Bool == true) { config.udp = false }
             // An SDR TV would show HDR as washed out, so it gets Accurate instead.
             if config.color == .hdr, message["hdr"] as? Bool == false { config.color = .srgb }
             server.sendText(config.json())
         case "ready":
-            Task { await beginCapture() }
+            // Only the first "ready" starts capture. A second one, from the TV reconnecting mid-cast or
+            // saying ready again while capture is still starting, only needs a fresh key frame.
+            if lock.withLock({ defer { captureStarted = true }; return captureStarted }) {
+                lock.withLock { encoder }?.requestKeyFrame()
+                if lock.withLock({ capture != nil }) { onState?(.casting) }
+            } else {
+                Task { await beginCapture() }
+            }
         case "udp":
             // The TV's receiver is listening. Until now the stream went by WebSocket, and stays there if
             // this never comes, so the picture never waits on UDP.
@@ -229,12 +243,6 @@ public final class CastSession {
     }
 
     private func beginCapture() async {
-        // The TV reconnecting mid-cast only needs a fresh key frame.
-        if capture != nil {
-            encoder?.requestKeyFrame()
-            onState?(.casting)
-            return
-        }
         do {
             let encoder = try HEVCEncoder(config: config) { [weak self] data, key, pts in
                 guard let self else { return }
@@ -252,11 +260,26 @@ public final class CastSession {
                 guard let self else { return }
                 self.sendMedia(Wire.packet(kind: Wire.audio, key: true, pts: pts, payload: pcm))
             }
-            self.encoder = encoder
-            self.capture = capture
-            // The tab's sound gets a moment to start flowing before anything stands in for it.
-            lock.withLock { tabAudioAt = CACurrentMediaTime() }
+            // Starting takes up to a few seconds. If the cast was stopped meanwhile, by the user, the
+            // timeout or a failed launch, nothing may keep running: no capture, no TV-sized display.
+            let wanted = lock.withLock { () -> Bool in
+                guard !finished else { return false }
+                self.encoder = encoder
+                self.capture = capture
+                // The tab's sound gets a moment to start flowing before anything stands in for it.
+                tabAudioAt = CACurrentMediaTime()
+                return true
+            }
+            guard wanted else {
+                encoder.invalidate()
+                virtualDisplay = nil
+                return
+            }
             try await capture.start()
+            if lock.withLock({ finished }) {
+                await capture.stop()
+                return
+            }
             onState?(.casting)
         } catch {
             // macOS can't capture a window on another desktop, and says so only as "capture failure".

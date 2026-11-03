@@ -79,23 +79,34 @@ public struct TV: Identifiable, Hashable, Sendable {
         return addresses
     }
 
+    public enum Launch: Sendable {
+        case running
+        /// The TV answered 404: the app really isn't on it.
+        case missing
+        /// Asked, but couldn't confirm it started. The TV may still open it, or the user can.
+        case unconfirmed
+    }
+
     /// Opens the receiver. The TV can answer 200 without starting it, so this checks and retries.
-    /// If it still refuses, the user can open Throwcast from the TV's Apps screen.
+    /// Every request has a short timeout, so the whole check ends within about 40 seconds.
     @discardableResult
-    public func launchReceiver() async -> Bool {
-        guard let url = URL(string: "http://\(host):8001/api/v2/applications/Thrwcast4K.Receiver") else { return false }
-        // A 404 means the app isn't on this TV, so there's nothing to retry.
-        if let (_, response) = try? await URLSession.shared.data(from: url), (response as? HTTPURLResponse)?.statusCode == 404 { return false }
-        for _ in 0 ..< 4 {
+    public func launchReceiver() async -> Launch {
+        guard let url = URL(string: "http://\(host):8001/api/v2/applications/Thrwcast4K.Receiver") else { return .unconfirmed }
+        func request(_ method: String) -> URLRequest {
             var request = URLRequest(url: url)
-            request.httpMethod = "POST"
+            request.httpMethod = method
             request.timeoutInterval = 4
-            _ = try? await URLSession.shared.data(for: request)
-            try? await Task.sleep(for: .milliseconds(1500))
-            if let (data, _) = try? await URLSession.shared.data(from: url),
-               let status = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               status["running"] as? Bool == true { return true }
+            return request
         }
-        return false
+        // A 404 means the app isn't on this TV, so there's nothing to retry.
+        if let (_, response) = try? await URLSession.shared.data(for: request("GET")), (response as? HTTPURLResponse)?.statusCode == 404 { return .missing }
+        for _ in 0 ..< 4 {
+            _ = try? await URLSession.shared.data(for: request("POST"))
+            try? await Task.sleep(for: .milliseconds(1500))
+            if let (data, _) = try? await URLSession.shared.data(for: request("GET")),
+               let status = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               status["running"] as? Bool == true { return .running }
+        }
+        return .unconfirmed
     }
 }

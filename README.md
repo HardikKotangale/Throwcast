@@ -46,6 +46,14 @@ No stick, no cable.
 
 Then open Throwcast and press **Show on TV**.
 
+## If it doesn't connect
+
+| Message on your Mac | What to do |
+| --- | --- |
+| **Throwcast isn't installed on this TV yet.** | Install the TV app ([guide](docs/INSTALL.md#2-the-tv-app)). |
+| **Couldn't open Throwcast on the TV.** | Open Throwcast from the TV's Apps screen, then press **Show on TV** again. |
+| **The TV didn't connect.** | One Mac casts at a time, and the first one keeps the TV. If someone else is casting, wait until they stop. |
+
 ## Learn more
 
 - [Install guide](docs/INSTALL.md): every step, building from source and making a DMG

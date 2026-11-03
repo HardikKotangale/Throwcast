@@ -164,8 +164,11 @@ public final class Engine {
                 self?.direct = playback
                 self?.emit(["event": "direct", "title": title, "state": "starting", "time": 0.0, "duration": 0.0])
                 Task {
-                    let launched = await tv.launchReceiver()
-                    launched ? respond(200, ["app": "Throwcast"]) : respond(502, ["error": CastError.receiverMissing.localizedDescription])
+                    switch await tv.launchReceiver() {
+                    case .running: respond(200, ["app": "Throwcast"])
+                    case .missing: respond(502, ["error": CastError.receiverMissing.localizedDescription])
+                    case .unconfirmed: respond(502, ["error": CastError.receiverNotOpened.localizedDescription])
+                    }
                 }
             } catch {
                 respond(500, ["error": error.localizedDescription])
@@ -469,10 +472,13 @@ public final class Engine {
         }
         self.session = session
         session.start()
-        Task { [weak self] in
-            if await TV(host: host)?.launchReceiver() == false {
-                await MainActor.run { self?.session?.fail(CastError.receiverMissing.localizedDescription) }
-            }
+        // Runs beside the cast, and can take a while on a slow TV. It may only end the cast it was
+        // started for, and only if the TV never connected: a TV that said hello has the app open.
+        // "Couldn't confirm" doesn't end anything; the 25-second wait for the TV covers that case.
+        Task { [weak session] in
+            guard let tv = await TV(host: host), await tv.launchReceiver() == .missing,
+                  let session, !session.heardFromTV else { return }
+            session.fail(CastError.receiverMissing.localizedDescription)
         }
     }
 
@@ -480,9 +486,11 @@ public final class Engine {
         guard session == nil, connectionTest == nil else { return }
         emit(["event": "test", "state": "running"])
         Task { [weak self] in
-            guard let tv = await TV.fetch(host: host), await tv.launchReceiver() else {
+            let launch = await TV.fetch(host: host)?.launchReceiver() ?? .unconfirmed
+            guard launch == .running else {
+                let problem: CastError = launch == .missing ? .receiverMissing : .receiverNotOpened
                 await MainActor.run {
-                    self?.emit(["event": "test", "state": "failed", "message": CastError.receiverMissing.localizedDescription])
+                    self?.emit(["event": "test", "state": "failed", "message": problem.localizedDescription])
                 }
                 return
             }

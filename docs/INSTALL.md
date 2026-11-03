@@ -6,6 +6,8 @@ There are three parts: the Mac app, the TV app and the browser extension. The TV
 
 **From the download:** open `Throwcast.dmg` and drag Throwcast to Applications. Builds that aren't notarized need a one-time **Open Anyway** in **System Settings > Privacy & Security**.
 
+**After updating to a new version:** macOS sees each build that isn't notarized as a new app, so Screen Recording stops working even though Throwcast still looks allowed. In **System Settings > Privacy & Security > Screen Recording**, select Throwcast, remove it with **−**, then open Throwcast and allow it again.
+
 **From source:** you need [Xcode](https://apps.apple.com/app/xcode/id497799835), [Flutter](https://docs.flutter.dev/get-started/install/macos) and [CocoaPods](https://cocoapods.org).
 
 1. **Optional:** create a signing certificate so macOS remembers your permissions across rebuilds. In **Keychain Access**, choose **Certificate Assistant > Create a Certificate…**, name it exactly `Throwcast Local Signing` and set **Certificate Type** to **Code Signing**.
