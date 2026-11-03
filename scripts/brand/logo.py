@@ -63,7 +63,7 @@ for size in (16, 32, 64, 128, 256, 512, 1024):
     big.resize((size, size), Image.LANCZOS).save(f'{mac}/app_icon_{size}.png')
 for size in (16, 32, 48, 128):
     big.resize((size, size), Image.LANCZOS).save(f'extension/icons/icon{size}.png')
-big.resize((256, 256), Image.LANCZOS).save('docs/icon.png')
+big.resize((256, 256), Image.LANCZOS).save('docs/assets/icon.png')
 big.resize((256, 256), Image.LANCZOS).save('tv/app/logo.png')
 white_mark(512, 423).save('tv/app/icon.png')
 print('done')

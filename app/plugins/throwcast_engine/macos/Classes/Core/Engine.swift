@@ -42,6 +42,7 @@ public final class Engine {
         switch message["cmd"] as? String {
         case "hello":
             emit(["event": "permission", "screen": CGPreflightScreenCaptureAccess()])
+            emit(["event": "encoders", "codecs": VideoCodec.available.map(\.rawValue)])
             discover()
             startControl()
         case "checkPermission":
@@ -416,7 +417,14 @@ public final class Engine {
         config.quality = (message["quality"] as? String).flatMap(Quality.init) ?? .better
         config.tenBit = message["tenBit"] as? Bool ?? true
         config.hdrPeakNits = message["hdrPeakNits"] as? Int ?? 1000
-        config.smooth = message["smooth"] as? Bool ?? true
+        // Only an encoder this Mac really has; H.264 can't carry HDR, so it gets standard video color.
+        // Another Mac may lack the saved one; then whatever this Mac does have, HEVC first.
+        let available = VideoCodec.available
+        let wanted = (message["codec"] as? String).flatMap(VideoCodec.init)
+        config.codec = wanted.flatMap { available.contains($0) ? $0 : nil } ?? available.first ?? .hevc
+        if config.codec == .h264, config.color == .hdr { config.color = .accurate }
+        config.delayMs = message["delayMs"] as? Int ?? ((message["smooth"] as? Bool ?? true) ? 400 : 33)
+        config.udp = message["transport"] as? String == "udp"
         config.adjustments = Self.adjustments(message)
         config.volume = Self.volume(message)
         // A tab whose sound comes straight from the browser: recording all of Chrome would add other tabs.
@@ -454,7 +462,7 @@ public final class Engine {
             self?.emit(["event": "tvFrame", "image": jpeg.base64EncodedString()])
         }
         session.onStats = { [weak self] stats in
-            let report: [String: Any] = ["fps": stats.fps, "mbps": stats.mbps, "rttMs": stats.rttMs, "dropped": stats.dropped, "bitrateMbps": stats.bitrateMbps,
+            let report: [String: Any] = ["lost": stats.lost, "fps": stats.fps, "mbps": stats.mbps, "rttMs": stats.rttMs, "dropped": stats.dropped, "bitrateMbps": stats.bitrateMbps,
                                          "encodedFps": stats.encodedFps, "width": config.width, "height": config.height]
             DispatchQueue.main.async { self?.lastStats = report }
             self?.emit(["event": "stats"].merging(report) { a, _ in a })

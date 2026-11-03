@@ -33,6 +33,19 @@ const bitratePresets = {
 };
 const customBitrateChoice = -1;
 
+/// How much the TV keeps in hand. More rides out Wi-Fi hiccups; less answers the pointer sooner.
+class Playback {
+  const Playback(this.title, this.note, this.delayMs);
+  final String title, note;
+  final int delayMs;
+}
+
+const playbacks = {
+  'smooth': Playback('Smooth · 0.4 s', 'Movies and live streams. Hiccups never show.', 400),
+  'balanced': Playback('Balanced · 0.1 s', 'Everyday use. Smoothest with TCP.', 100),
+  'instant': Playback('Instant · 0.03 s', 'Mouse and typing. Best with UDP.', 33),
+};
+
 /// One choice that covers resolution and bitrate, because that's the decision people are really making.
 class Quality {
   const Quality(this.title, this.note, this.height, this.mbps);
@@ -219,7 +232,9 @@ class _HomePageState extends State<HomePage> {
   var fps = 60;
   var bitrate = 40;
   var usesCustomBitrate = false;
-  var smooth = true;
+  var playback = 'smooth';
+  var udp = false;
+  var codec = 'hevc';
   var castVolume = 1.0;
   double? volumeDrag;
   Timer? volumeRelease;
@@ -261,7 +276,12 @@ class _HomePageState extends State<HomePage> {
     bitrate = saved['bitrate'] as int? ?? bitrate;
     usesCustomBitrate = !bitratePresets.containsKey(bitrate);
     customBitrate.text = '$bitrate';
-    smooth = saved['smooth'] as bool? ?? smooth;
+    // Older settings had a Smooth switch; off meant the lowest delay, which is Instant now.
+    playback = playbacks.containsKey(saved['playback'])
+        ? saved['playback'] as String
+        : (saved['smooth'] == false ? 'instant' : 'smooth');
+    udp = saved['udp'] as bool? ?? udp;
+    codec = saved['codec'] as String? ?? codec;
     castVolume = (saved['castVolume'] as num? ?? castVolume).toDouble();
     menuBar = saved['menuBar'] as bool? ?? menuBar;
     dockIcon = saved['dockIcon'] as bool? ?? dockIcon;
@@ -360,7 +380,9 @@ class _HomePageState extends State<HomePage> {
     'hdrPeakNits': hdrPeakNits,
     'fps': fps,
     'bitrate': bitrate,
-    'smooth': smooth,
+    'playback': playback,
+    'udp': udp,
+    'codec': codec,
     'castVolume': castVolume,
     'menuBar': menuBar,
     'dockIcon': dockIcon,
@@ -394,7 +416,9 @@ class _HomePageState extends State<HomePage> {
       'tenBit': tenBit,
       'hdrPeakNits': hdrPeakNits,
       'bitrateMbps': bitrate,
-      'smooth': smooth,
+      'delayMs': playbacks[playback]!.delayMs,
+      'transport': udp ? 'udp' : 'tcp',
+      'codec': codec,
       // A tab's own volume does this job, and two of them would multiply.
       'volume': tabCast == null ? castVolume : 1.0,
       'source': tabCast == null ? source.wire : 'window',
@@ -729,6 +753,7 @@ class _HomePageState extends State<HomePage> {
       children: [
         Press(
           scale: 0.88,
+          circle: true,
           label: value > 0 ? 'Mute' : 'Unmute',
           onTap: () {
             if (value > 0) lastVolume = value;
@@ -913,7 +938,7 @@ class _HomePageState extends State<HomePage> {
   Widget _connection() {
     final stats = engine.stats;
     // Smooth keeps 0.4 s in hand on the TV, so delay under that is still invisible there.
-    final (great, ok) = smooth ? (350.0, 600.0) : (80.0, 200.0);
+    final (great, ok) = playback == 'smooth' ? (350.0, 600.0) : (80.0, 200.0);
     final delay = engine.rttAverage;
     final (word, color) = switch (delay) {
       <= 0 => ('Checking', context.secondary),
@@ -932,7 +957,7 @@ class _HomePageState extends State<HomePage> {
         Press(
           scale: 0.98,
           label: 'Connection, $word',
-          selected: showsConnection,
+          expanded: showsConnection,
           onTap: () => setState(() => showsConnection = !showsConnection),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
@@ -1545,18 +1570,51 @@ class _HomePageState extends State<HomePage> {
               },
             ),
             if (usesCustomBitrate) _customBitrateRow(),
-            MenuRow<bool>(
+            MenuRow<String>(
               badge: const IconBadge(
                 CupertinoIcons.play_rectangle_fill,
                 CupertinoColors.systemIndigo,
               ),
               title: 'Playback',
-              note: smooth
-                  ? 'Best for video. Runs about 0.4 seconds behind.'
-                  : 'Best for typing. May stutter on weak Wi-Fi.',
-              value: smooth,
-              options: const {true: 'Smooth', false: 'Lowest Delay'},
-              onChanged: (value) => change(() => smooth = value),
+              note: playbacks[playback]!.note,
+              value: playback,
+              options: {
+                for (final MapEntry(:key, :value) in playbacks.entries)
+                  key: value.title,
+              },
+              onChanged: (value) => change(() => playback = value),
+            ),
+            MenuRow<String>(
+              badge: const IconBadge(
+                CupertinoIcons.square_stack_3d_up_fill,
+                CupertinoColors.systemTeal,
+              ),
+              title: 'Video Encoder',
+              note: codec == 'h264'
+                  ? (isHdr
+                        ? 'H.264 has no HDR, so standard color is used.'
+                        : 'Quickest, 8-bit. Needs about twice the bitrate.')
+                  : 'Best picture per Mbps, with 10-bit and HDR.',
+              // Only what this Mac's hardware can encode, as it reported at start.
+              value: engine.codecs.contains(codec) ? codec : 'hevc',
+              options: {
+                for (final c in engine.codecs)
+                  c: c == 'h264' ? 'H.264 · Hardware' : 'HEVC · Hardware',
+              },
+              onChanged: (value) => change(() => codec = value),
+            ),
+            MenuRow<bool>(
+              badge: const IconBadge(
+                CupertinoIcons.bolt_fill,
+                CupertinoColors.systemYellow,
+              ),
+              title: 'Network Mode',
+              note: udp
+                  ? 'Never waits on Wi-Fi. A lost frame is skipped.'
+                  : 'Never loses a frame. May pause on weak Wi-Fi.',
+              value: udp,
+              options: const {false: 'TCP · Reliable', true: 'UDP · Fastest'},
+              onChanged: (value) => change(() => udp = value),
             ),
             _connectionRow(),
           ],

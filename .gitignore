@@ -41,3 +41,6 @@ tv/app/.sign/
 *.mobileprovision
 .env
 .env.*
+
+# Private notes, kept out of the public repo
+docs/ARCHITECTURE.md

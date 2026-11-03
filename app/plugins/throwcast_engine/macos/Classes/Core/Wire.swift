@@ -40,10 +40,25 @@ public enum Wire {
         return out
     }
 
-    /// VPS, SPS and PPS as start-code data. Sent before every key frame so the TV can join any time.
+    /// VPS, SPS and PPS (HEVC) or SPS and PPS (H.264) as start-code data. Sent before every key frame
+    /// so the TV can join any time.
     public static func parameterSets(_ format: CMFormatDescription) -> Data {
         var out = Data()
         var count = 0
+        if CMFormatDescriptionGetMediaSubType(format) == kCMVideoCodecType_H264 {
+            CMVideoFormatDescriptionGetH264ParameterSetAtIndex(format, parameterSetIndex: 0, parameterSetPointerOut: nil,
+                                                               parameterSetSizeOut: nil, parameterSetCountOut: &count, nalUnitHeaderLengthOut: nil)
+            for index in 0 ..< count {
+                var pointer: UnsafePointer<UInt8>?
+                var size = 0
+                guard CMVideoFormatDescriptionGetH264ParameterSetAtIndex(format, parameterSetIndex: index, parameterSetPointerOut: &pointer,
+                                                                         parameterSetSizeOut: &size, parameterSetCountOut: nil,
+                                                                         nalUnitHeaderLengthOut: nil) == noErr, let pointer else { continue }
+                out.append(contentsOf: [0, 0, 0, 1])
+                out.append(pointer, count: size)
+            }
+            return out
+        }
         CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(format, parameterSetIndex: 0, parameterSetPointerOut: nil,
                                                            parameterSetSizeOut: nil, parameterSetCountOut: &count,
                                                            nalUnitHeaderLengthOut: nil)

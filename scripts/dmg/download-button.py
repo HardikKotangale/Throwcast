@@ -33,12 +33,12 @@ def button(fill, title, detail, shadow, highlight, out):
         fade = fade.point(lambda v: max(0, (v - 200) * 255 // 55))
         edge.putalpha(Image.composite(edge.getchannel('A'), Image.new('L', full, 0), fade))
         im.alpha_composite(edge)
-    icon = Image.open('docs/icon.png').convert('RGBA').resize((48 * S, 48 * S), Image.LANCZOS)
+    icon = Image.open('docs/assets/icon.png').convert('RGBA').resize((48 * S, 48 * S), Image.LANCZOS)
     im.alpha_composite(icon, ((PAD + 14) * S, (PAD + 12) * S))
     d.text(((PAD + 72) * S, (PAD + 28) * S), 'Download for macOS', font=font(18, 'Semibold'), fill=title, anchor='lm')
     d.text(((PAD + 72) * S, (PAD + 49) * S), 'Apple silicon · macOS 15 or later', font=font(12, 'Regular'), fill=detail, anchor='lm')
     im.save(out, optimize=True)
 
 
-button((14, 14, 16, 255), (255, 255, 255), (255, 255, 255, 150), (0, 0, 0, 70), (255, 255, 255, 40), 'docs/download-macos.png')
-button((255, 255, 255, 255), (29, 29, 31), (110, 110, 115), (0, 0, 0, 140), (255, 255, 255, 0), 'docs/download-macos-dark.png')
+button((14, 14, 16, 255), (255, 255, 255), (255, 255, 255, 150), (0, 0, 0, 70), (255, 255, 255, 40), 'docs/assets/download-macos.png')
+button((255, 255, 255, 255), (29, 29, 31), (110, 110, 115), (0, 0, 0, 140), (255, 255, 255, 0), 'docs/assets/download-macos-dark.png')

@@ -16,6 +16,30 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(Engine.gain(wanted: 0.5, reported: 0), 1)
     }
 
+    func testUDPLayoutMatchesTheTV() {
+        let packet = Data((0 ..< 3000).map { UInt8(truncatingIfNeeded: $0 * 31) })
+        let datagrams = MediaUDP.datagrams(frame: 0x0102_0304, packet: Data([Wire.video]) + packet.dropFirst())
+        // 3 shards of up to 1200 bytes, then one repair shard for the group.
+        XCTAssertEqual(datagrams.count, 4)
+        let first = [UInt8](datagrams[0])
+        XCTAssertEqual(Array(first[0 ..< 12]), [0x54, 2, 4, 3, 2, 1, 0, 0, 3, 0, 0x58, 0x02])  // the last shard holds 600 bytes
+        // The repair shard rebuilds a lost shard: XOR of the others and the repair gives it back.
+        let shards = datagrams.prefix(3).map { [UInt8]($0.dropFirst(12)) }
+        var rebuilt = [UInt8](datagrams[3].dropFirst(12))
+        for shard in [shards[0], shards[2]] { for (i, byte) in shard.enumerated() { rebuilt[i] ^= byte } }
+        XCTAssertEqual(Array(rebuilt.prefix(shards[1].count)), shards[1])
+    }
+
+    func testH264IsEightBitAndThisMacHasHEVC() {
+        var config = StreamConfig(width: 3840, height: 2160)
+        config.tenBit = true
+        config.codec = .h264
+        XCTAssertFalse(config.main10)
+        XCTAssertEqual(config.profile as String, kVTProfileLevel_H264_High_AutoLevel as String)
+        XCTAssertTrue(config.json().contains(#""codec":"h264""#))
+        XCTAssertTrue(VideoCodec.available.contains(.hevc))
+    }
+
     func testCropFollowsTheWindow() {
         let original = CGRect(x: 0, y: 88, width: 1920, height: 1080)
         let start = CGSize(width: 1920, height: 1168)
