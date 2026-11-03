@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Throwcast</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <svg hidden>
+    <symbol id="icon-play" viewBox="0 0 16 16"><path d="M4 2.6v10.8c0 .6.6.9 1.1.6l8.8-5.4c.5-.3.5-.9 0-1.2L5.1 2c-.5-.3-1.1 0-1.1.6z"/></symbol>
+    <symbol id="icon-pause" viewBox="0 0 16 16"><rect x="3.5" y="2" width="3.2" height="12" rx="1"/><rect x="9.3" y="2" width="3.2" height="12" rx="1"/></symbol>
+    <symbol id="icon-speaker" viewBox="0 0 16 16"><path d="M7 2.7 3.9 5.4H2c-.6 0-1 .4-1 1v3.2c0 .6.4 1 1 1h1.9L7 13.3c.5.4 1.2.1 1.2-.6V3.3c0-.7-.7-1-1.2-.6z"/><path d="M10.3 5.2a4 4 0 0 1 0 5.6l.9.9a5.3 5.3 0 0 0 0-7.4zM12.3 3.2a6.8 6.8 0 0 1 0 9.6l.9.9a8.1 8.1 0 0 0 0-11.4z"/></symbol>
+    <symbol id="icon-back" viewBox="0 0 24 24"><path d="M12 4.5A8 8 0 1 1 4 12.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M13 1 8.5 4.5 13 8z"/><text x="12" y="16.2" text-anchor="middle" font-size="8.5" font-weight="700" font-family="system-ui">10</text></symbol>
+    <symbol id="icon-forward" viewBox="0 0 24 24"><path d="M12 4.5a8 8 0 1 0 8 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M11 1l4.5 3.5L11 8z"/><text x="12" y="16.2" text-anchor="middle" font-size="8.5" font-weight="700" font-family="system-ui">10</text></symbol>
+    <symbol id="icon-stop" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/></symbol>
+    <symbol id="icon-tv" viewBox="0 0 16 16"><path d="M2.5 2.5h11A1.5 1.5 0 0 1 15 4v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 11V4a1.5 1.5 0 0 1 1.5-1.5zM5 14h6v1H5z"/></symbol>
+    <symbol id="icon-speaker-low" viewBox="0 0 16 16"><path d="M8 2.700 4.900 5.4H3c-.6 0-1 .4-1 1v3.2c0 .6.4 1 1 1h1.900L8 13.300c.5.4 1.2.1 1.2-.6V3.300c0-.7-.7-1-1.2-.6z"/></symbol>
+  </svg>
+  <header>
+    <img src="icons/icon32.png" alt="" width="20" height="20">
+    <strong>Throwcast</strong>
+    <span id="tv"></span>
+  </header>
+
+  <main id="view" aria-live="polite"></main>
+
+  <template id="message">
+    <section class="message"><h1></h1><p></p></section>
+  </template>
+
+  <template id="send">
+    <section>
+      <h1 class="title"></h1>
+      <p class="detail"></p>
+      <button class="primary" id="play">Play on TV</button>
+      <button class="quiet" id="instead">Show This Tab Instead</button>
+      <p class="error" hidden></p>
+    </section>
+  </template>
+
+  <template id="tab">
+    <section>
+      <h1 class="title"></h1>
+      <p>Just the page, without the browser around it.</p>
+      <button class="primary" id="cast">Show This Tab on TV</button>
+      <button class="quiet" id="other" hidden></button>
+      <p class="error" hidden></p>
+    </section>
+  </template>
+
+  <template id="casting">
+    <section>
+      <h1 class="title"></h1>
+      <p>On your TV. Your Mac is free for anything else.</p>
+      <div class="controls" hidden>
+        <div class="live" hidden><span class="note">Watching live</span><button id="goLive" class="pill"><i></i><span>LIVE</span></button></div>
+        <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Position">
+        <div class="times"><span id="now">0:00</span><span id="total">0:00</span></div>
+        <div class="transport">
+          <button id="back" class="skip" aria-label="Back 10 seconds"><svg aria-hidden="true"><use href="#icon-back"></use></svg></button>
+          <button id="toggle" class="round" aria-label="Pause"><svg aria-hidden="true"><use href="#icon-pause"></use></svg></button>
+          <button id="forward" class="skip" aria-label="Forward 10 seconds"><svg aria-hidden="true"><use href="#icon-forward"></use></svg></button>
+        </div>
+        <label class="volume"><svg aria-hidden="true"><use href="#icon-speaker-low"></use></svg><input id="volume" type="range" min="0" max="100" value="100" aria-label="Volume"><svg aria-hidden="true"><use href="#icon-speaker"></use></svg></label>
+      </div>
+      <div class="segments" role="group" aria-label="Picture size">
+        <button data-size="contain">Show All</button>
+        <button data-size="cover">Fill</button>
+        <button data-size="fill">Stretch</button>
+      </div>
+      <button id="stopCast" class="stop"><svg aria-hidden="true"><use href="#icon-stop"></use></svg>Stop Casting</button>
+    </section>
+  </template>
+
+  <template id="playing">
+    <section>
+      <h1 class="title"></h1>
+      <p class="detail">Playing on your TV</p>
+      <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Position">
+      <div class="times"><span id="now">0:00</span><span id="total">0:00</span></div>
+      <div class="transport">
+        <button id="back" class="skip" aria-label="Back 10 seconds"><svg aria-hidden="true"><use href="#icon-back"></use></svg></button>
+        <button id="toggle" class="round" aria-label="Pause"><svg aria-hidden="true"><use href="#icon-pause"></use></svg></button>
+        <button id="forward" class="skip" aria-label="Forward 10 seconds"><svg aria-hidden="true"><use href="#icon-forward"></use></svg></button>
+      </div>
+      <button id="stop" class="stop"><svg aria-hidden="true"><use href="#icon-stop"></use></svg>Stop Video</button>
+    </section>
+  </template>
+
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

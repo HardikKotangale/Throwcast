@@ -1,0 +1,22 @@
+PODS:
+  - FlutterMacOS (1.0.0)
+  - throwcast_engine (1.0.0):
+    - FlutterMacOS
+
+DEPENDENCIES:
+  - FlutterMacOS (from `Flutter/ephemeral`)
+  - throwcast_engine (from `Flutter/ephemeral/.symlinks/plugins/throwcast_engine/macos`)
+
+EXTERNAL SOURCES:
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+  throwcast_engine:
+    :path: Flutter/ephemeral/.symlinks/plugins/throwcast_engine/macos
+
+SPEC CHECKSUMS:
+  FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
+  throwcast_engine: fd91ef11a4f83e7ddcc0de1c373ce80616d49580
+
+PODFILE CHECKSUM: 26ee6f5033708847cf1376fbc9a71d19413c5b16
+
+COCOAPODS: 1.17.0

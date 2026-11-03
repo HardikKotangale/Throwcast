@@ -1,0 +1,15 @@
+name: throwcast_engine
+description: Screen capture, encoding and streaming for Throwcast.
+version: 1.0.0
+publish_to: none
+environment:
+  sdk: ^3.0.0
+  flutter: ">=3.3.0"
+dependencies:
+  flutter:
+    sdk: flutter
+flutter:
+  plugin:
+    platforms:
+      macos:
+        pluginClass: ThrowcastEnginePlugin

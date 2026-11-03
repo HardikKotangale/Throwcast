@@ -1,0 +1,43 @@
+# macOS
+.DS_Store
+*.swp
+
+# Swift package (developer command-line tool and tests)
+.build/
+.swiftpm/
+*.xcuserstate
+xcuserdata/
+DerivedData/
+
+# Flutter app (app/.gitignore covers the rest)
+app/build/
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/macos/Pods/
+app/macos/Flutter/ephemeral/
+app/plugins/throwcast_engine/.dart_tool/
+app/plugins/throwcast_engine/build/
+
+# Release output: DMGs and the dmgbuild virtual environment
+dist/
+
+# TV package: signed with the builder's own Samsung certificate, never shared
+tv/dist/
+tv/.buildResult/
+tv/app/.sign/
+
+# Editors and local tools
+.idea/
+.vscode/
+.claude/
+*.log
+
+# Secrets that must never be committed
+*.p12
+*.pem
+*.key
+*.cer
+*.mobileprovision
+.env
+.env.*
