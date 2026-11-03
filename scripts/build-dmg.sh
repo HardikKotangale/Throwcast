@@ -50,11 +50,15 @@ Throwcast ${VERSION}
 1. Drag Throwcast to Applications, then open it.
    If macOS says it can't check the app, open System Settings > Privacy & Security
    and choose Open Anyway. This is needed once, for builds that aren't notarized.
+   Updating from an earlier version? Allow Screen Recording again: in System
+   Settings > Privacy & Security > Screen Recording, remove Throwcast with the
+   minus button, then open Throwcast and allow it.
 2. Browser extension: open chrome://extensions (or brave://extensions), turn on
    Developer mode, choose Load unpacked, and pick a copy of the Browser Extension
    folder from your Mac, not from this disk image.
 3. TV app: Samsung only installs apps signed for your own TV, so it's built from
-   the source once. Follow "2. The TV app" in the README.
+   the source once. Follow "2. The TV app" in docs/INSTALL.md on the project page:
+   https://github.com/HardikKotangale/Throwcast/blob/main/docs/INSTALL.md
 
 Only tested on a Samsung AU8000 55" TV.
 EOF

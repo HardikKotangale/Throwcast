@@ -107,7 +107,7 @@ Throwcast shows on your TV what is already playing on your Mac. It doesn't break
 ## Limits
 
 - **Unencrypted stream:** anyone who can capture traffic on your network could see it, so don't cast private content on a shared network. The Mac only streams to the TV you chose.
-- **One TV at a time.**
+- **One TV at a time, and one Mac per TV.** The Mac that connects first keeps the TV until its cast ends. Another Mac that tries meanwhile waits up to 25 seconds, then says the TV didn't connect, and the cast already playing isn't interrupted.
 - **Protected video:** DRM video from some services usually shows black.
 - **Mission Control:** the TV holds the last picture until it closes, while the sound keeps playing.
 - **Smooth delay:** Smooth runs about 0.4 seconds behind, so a pause on the Mac takes a moment to reach the TV. Pick **Balanced** or **Instant** under **Playback** for less.
