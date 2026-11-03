@@ -1,8 +1,30 @@
 import CoreGraphics
 import CoreVideo
+import CoreMedia
 import Foundation
 import ScreenCaptureKit
 import VideoToolbox
+
+/// The hardware encoders a Mac can have that a TV can also decode.
+public enum VideoCodec: String, CaseIterable, Sendable {
+    /// Best picture per Mbps, and the only one with 10-bit and HDR.
+    case hevc
+    /// A little quicker to encode and decode, but 8-bit only and needs more bitrate for the same picture.
+    case h264
+
+    public var codecType: CMVideoCodecType { self == .hevc ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264 }
+
+    /// The ones this Mac can encode in hardware, asked of VideoToolbox rather than assumed.
+    public static var available: [VideoCodec] {
+        var list: CFArray?
+        VTCopyVideoEncoderList(nil, &list)
+        let hardware = Set(((list as? [[String: Any]]) ?? []).compactMap { encoder -> UInt32? in
+            guard encoder[kVTVideoEncoderList_IsHardwareAccelerated as String] as? Bool == true else { return nil }
+            return (encoder[kVTVideoEncoderList_CodecType as String] as? NSNumber)?.uint32Value
+        })
+        return allCases.filter { hardware.contains($0.codecType) }
+    }
+}
 
 public enum ColorMode: String, CaseIterable, Identifiable, Sendable {
     /// `srgb` encodes like the Mac's own screen and looks closest to it on a TV.
@@ -35,7 +57,12 @@ public struct StreamConfig: Equatable, Sendable {
     /// Peak brightness advertised to an HDR TV. Lower looks brighter on TVs that tone-map.
     public var hdrPeakNits: Int
     /// Holds about 0.1 s on the TV to absorb Wi-Fi bursts. Best for video; adds delay to typing.
-    public var smooth = true
+    /// How much the TV keeps in hand before showing a frame: 400 ms (Smooth) rides out Wi-Fi hiccups,
+    /// 100 (Balanced) is everyday use, 33 (Instant, two frames) is for the pointer and typing.
+    public var delayMs = 400
+    public var smooth: Bool { delayMs >= 400 }
+    /// Video and sound over UDP, which skips a lost frame instead of waiting for it. Needs a TV app that supports it.
+    public var udp = false
     /// An exact bitrate, like OBS. Nil uses the quality preset.
     public var bitrateMbps: Int?
     /// 0 to 1, applied to the audio sent to the TV.
@@ -61,15 +88,18 @@ public struct StreamConfig: Equatable, Sendable {
         return Int(quality.baseMbps * max(scale, 0.25) * 1_000_000)
     }
 
-    /// HDR is meaningless in 8 bits, so it forces 10-bit.
-    public var main10: Bool { tenBit || color == .hdr }
+    public var codec: VideoCodec = .hevc
+
+    /// HDR is meaningless in 8 bits, so it forces 10-bit. Apple's hardware H.264 is 8-bit only.
+    public var main10: Bool { codec == .hevc && (tenBit || color == .hdr) }
 
     public var pixelFormat: OSType {
         main10 ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
     }
 
     public var profile: CFString {
-        main10 ? kVTProfileLevel_HEVC_Main10_AutoLevel : kVTProfileLevel_HEVC_Main_AutoLevel
+        codec == .h264 ? kVTProfileLevel_H264_High_AutoLevel
+            : main10 ? kVTProfileLevel_HEVC_Main10_AutoLevel : kVTProfileLevel_HEVC_Main_AutoLevel
     }
 
     /// The color macOS converts the screen into, before encoding.
@@ -110,6 +140,6 @@ public struct StreamConfig: Equatable, Sendable {
     }
 
     public func json() -> String {
-        #"{"type":"config","width":\#(width),"height":\#(height),"fps":\#(fps),"main10":\#(main10),"hdr":\#(color == .hdr),"smooth":\#(smooth)}"#
+        #"{"type":"config","width":\#(width),"height":\#(height),"fps":\#(fps),"main10":\#(main10),"hdr":\#(color == .hdr),"smooth":\#(smooth),"delay":\#(delayMs),"udp":\#(udp),"codec":"\#(codec.rawValue)"}"#
     }
 }

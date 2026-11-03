@@ -105,6 +105,9 @@ class Engine extends ChangeNotifier {
 
   /// Nil until the tab reports a video.
   double? tabVolume;
+
+  /// Hardware encoders this Mac has, as the engine found them.
+  var codecs = <String>['hevc'];
   var tabLive = false;
 
   /// Seconds behind the live edge, for a live stream.
@@ -152,6 +155,8 @@ class Engine extends ChangeNotifier {
         addressError = null;
       case 'addFailed':
         addressError = 'No Samsung TV answered at ${event['host']}.';
+      case 'encoders':
+        codecs = [for (final c in event['codecs'] as List) c as String];
       case 'tvFrame':
         tvFrame = base64Decode(event['image']);
       case 'tabState':

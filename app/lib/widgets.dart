@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/physics.dart';
+import 'package:flutter/services.dart';
 
 /// Apple's two spring parameters. Damping 1 settles without overshoot, which suits anything
 /// that wasn't thrown by the user; response is roughly how long it takes to get there.
@@ -47,14 +48,44 @@ class _SpringState extends State<Spring> with SingleTickerProviderStateMixin {
       AnimatedBuilder(animation: controller, child: widget.child, builder: (context, child) => widget.builder(context, controller.value, child));
 }
 
-/// Dips the moment the pointer goes down and springs back on release.
+/// Enter and Space press whatever has keyboard focus. Declared on each control, so they win over
+/// the window's own Enter shortcut (start/stop casting) while a control is focused.
+const pressKeys = <ShortcutActivator, Intent>{
+  SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+  SingleActivator(LogicalKeyboardKey.numpadEnter): ActivateIntent(),
+  SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+};
+
+/// The ring a keyboard-focused control wears, in the control's own shape.
+Decoration focusRing(BuildContext context, {bool circle = false, double radius = 9}) {
+  final side = BorderSide(color: accent.resolveFrom(context), width: 2);
+  return ShapeDecoration(shape: circle ? CircleBorder(side: side) : RoundedRectangleBorder(side: side, borderRadius: BorderRadius.circular(radius)));
+}
+
+/// Dips the moment the pointer goes down and springs back on release. Tab reaches it, and
+/// Enter or Space presses it, with a focus ring only while the keyboard is in use.
 class Press extends StatefulWidget {
-  const Press({required this.child, required this.onTap, this.label, this.selected = false, this.scale = 0.97, super.key});
+  const Press({
+    required this.child,
+    required this.onTap,
+    this.label,
+    this.selected = false,
+    this.expanded,
+    this.scale = 0.97,
+    this.circle = false,
+    this.focusNode,
+    super.key,
+  });
   final Widget child;
   final VoidCallback? onTap;
   final String? label;
   final bool selected;
+
+  /// For controls that open and close something, so VoiceOver says "expanded" rather than "selected".
+  final bool? expanded;
   final double scale;
+  final bool circle;
+  final FocusNode? focusNode;
 
   @override
   State<Press> createState() => _PressState();
@@ -62,6 +93,7 @@ class Press extends StatefulWidget {
 
 class _PressState extends State<Press> {
   var pressed = false;
+  var ring = false;
 
   void set(bool value) {
     if (widget.onTap != null) setState(() => pressed = value);
@@ -71,10 +103,16 @@ class _PressState extends State<Press> {
   Widget build(BuildContext context) => Semantics(
         button: true,
         enabled: widget.onTap != null,
-        selected: widget.selected,
+        selected: widget.expanded == null ? widget.selected : null,
+        expanded: widget.expanded,
         label: widget.label,
-        child: MouseRegion(
-          cursor: widget.onTap == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
+        child: FocusableActionDetector(
+          focusNode: widget.focusNode,
+          enabled: widget.onTap != null,
+          mouseCursor: widget.onTap == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
+          shortcuts: pressKeys,
+          actions: {ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) => widget.onTap?.call())},
+          onShowFocusHighlight: (value) => setState(() => ring = value),
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTapDown: (_) => set(true),
@@ -84,7 +122,11 @@ class _PressState extends State<Press> {
             child: Spring(
               value: pressed ? widget.scale : 1,
               response: 0.22,
-              child: widget.child,
+              child: DecoratedBox(
+                position: DecorationPosition.foreground,
+                decoration: ring ? focusRing(context, circle: widget.circle) : const BoxDecoration(),
+                child: widget.child,
+              ),
               builder: (_, scale, child) => Transform.scale(scale: scale, child: child),
             ),
           ),
@@ -131,7 +173,8 @@ class Group extends StatelessWidget {
 }
 
 /// CupertinoSlider only answers near its thumb. This one jumps to wherever it's pressed, on the
-/// press itself, then follows the pointer until release.
+/// press itself, then follows the pointer until release. Tab reaches it; Left and Right move it
+/// a twentieth of its range, held keys repeating.
 class TapSlider extends StatelessWidget {
   const TapSlider({required this.value, required this.onChanged, this.onChangeEnd, this.min = 0, this.max = 1, super.key});
   final double value, min, max;
@@ -149,17 +192,43 @@ class TapSlider extends StatelessWidget {
             return min + ((event.localPosition.dx - inset) / travel).clamp(0.0, 1.0) * (max - min);
           }
 
-          return MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: Listener(
-              behavior: HitTestBehavior.opaque,
-              onPointerDown: (event) => onChanged(at(event)),
-              onPointerMove: (event) => onChanged(at(event)),
-              onPointerUp: (event) => onChangeEnd?.call(at(event)),
-              child: SizedBox(
-                width: double.infinity,
-                child: IgnorePointer(child: CupertinoSlider(value: value, min: min, max: max, onChanged: onChanged)),
-              ),
+          KeyEventResult key(FocusNode _, KeyEvent event) {
+            if (event is KeyUpEvent) return KeyEventResult.ignored;
+            final step = event.logicalKey == LogicalKeyboardKey.arrowRight
+                ? 1
+                : event.logicalKey == LogicalKeyboardKey.arrowLeft
+                    ? -1
+                    : 0;
+            if (step == 0) return KeyEventResult.ignored;
+            final next = (value + step * (max - min) / 20).clamp(min, max);
+            onChanged(next);
+            onChangeEnd?.call(next);
+            return KeyEventResult.handled;
+          }
+
+          return Focus(
+            onKeyEvent: key,
+            child: Builder(
+              builder: (context) {
+                final ring = Focus.of(context).hasPrimaryFocus && FocusManager.instance.highlightMode == FocusHighlightMode.traditional;
+                return MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: Listener(
+                    behavior: HitTestBehavior.opaque,
+                    onPointerDown: (event) => onChanged(at(event)),
+                    onPointerMove: (event) => onChanged(at(event)),
+                    onPointerUp: (event) => onChangeEnd?.call(at(event)),
+                    child: DecoratedBox(
+                      position: DecorationPosition.foreground,
+                      decoration: ring ? focusRing(context, radius: 16) : const BoxDecoration(),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: IgnorePointer(child: CupertinoSlider(value: value, min: min, max: max, onChanged: onChanged)),
+                      ),
+                    ),
+                  ),
+                );
+              },
             ),
           );
         },
@@ -340,6 +409,7 @@ class SliderRow extends StatelessWidget {
             children: [
               Press(
                 scale: 0.88,
+                circle: true,
                 label: 'Reset $title',
                 onTap: () => onChanged(neutral),
                 child: SizedBox(
@@ -429,6 +499,7 @@ class CircleButton extends StatelessWidget {
         onTap: onTap,
         label: label,
         scale: 0.94,
+        circle: true,
         child: Container(
           width: size,
           height: size,
@@ -462,7 +533,7 @@ class Disclosure extends StatelessWidget {
   Widget build(BuildContext context) => Press(
         scale: 0.99,
         label: title,
-        selected: open,
+        expanded: open,
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
@@ -596,12 +667,25 @@ class MenuRow<T> extends StatefulWidget {
 class _MenuRowState<T> extends State<MenuRow<T>> {
   final anchor = LayerLink();
   final portal = OverlayPortalController();
+  final rowFocus = FocusNode();
   var opensUp = false;
   var room = 300.0;
 
+  @override
+  void dispose() {
+    rowFocus.dispose();
+    super.dispose();
+  }
+
+  /// Keyboard focus goes back to the row, so Tab carries on from where the menu was opened.
+  void close() {
+    portal.hide();
+    rowFocus.requestFocus();
+  }
+
   /// Opens toward whichever side has room, so the menu never runs off the window.
   void toggle() {
-    if (portal.isShowing) return portal.hide();
+    if (portal.isShowing) return close();
     final box = context.findRenderObject()! as RenderBox;
     final top = box.localToGlobal(Offset.zero).dy;
     final height = MediaQuery.sizeOf(context).height;
@@ -623,6 +707,7 @@ class _MenuRowState<T> extends State<MenuRow<T>> {
           overlayChildBuilder: (_) => _menu(context),
           child: Press(
             scale: 0.99,
+            focusNode: rowFocus,
             onTap: toggle,
             label: '${widget.title}, ${widget.options[widget.value]}',
             child: Padding(
@@ -654,21 +739,27 @@ class _MenuRowState<T> extends State<MenuRow<T>> {
         ),
       );
 
-  Widget _menu(BuildContext context) => Focus(
-        autofocus: true,
-        onKeyEvent: (_, event) {
-          if (event.logicalKey.keyLabel == 'Escape') {
-            portal.hide();
-            return KeyEventResult.handled;
+  Widget _menu(BuildContext context) => FocusScope(
+        onKeyEvent: (node, event) {
+          if (event is KeyUpEvent) return KeyEventResult.ignored;
+          final key = event.logicalKey;
+          if (key == LogicalKeyboardKey.escape) {
+            close();
+          } else if (key == LogicalKeyboardKey.arrowDown) {
+            node.nextFocus();
+          } else if (key == LogicalKeyboardKey.arrowUp) {
+            node.previousFocus();
+          } else {
+            return KeyEventResult.ignored;
           }
-          return KeyEventResult.ignored;
+          return KeyEventResult.handled;
         },
         child: Stack(
           children: [
             Positioned.fill(
               child: Listener(
-                onPointerSignal: (_) => portal.hide(),
-                child: GestureDetector(behavior: HitTestBehavior.opaque, onTapDown: (_) => portal.hide()),
+                onPointerSignal: (_) => close(),
+                child: GestureDetector(behavior: HitTestBehavior.opaque, onTapDown: (_) => close()),
               ),
             ),
             CompositedTransformFollower(
@@ -700,7 +791,7 @@ class _MenuRowState<T> extends State<MenuRow<T>> {
                                 text: entry.value,
                                 checked: entry.key == widget.value,
                                 onTap: () {
-                                  portal.hide();
+                                  close();
                                   if (entry.key != widget.value) widget.onChanged(entry.key);
                                 },
                               ),
@@ -758,18 +849,33 @@ class _MenuItem extends StatefulWidget {
   State<_MenuItem> createState() => _MenuItemState();
 }
 
+/// Like a macOS menu, the pointer and the arrow keys move one shared highlight: hovering an item
+/// focuses it. The current choice is focused when the menu opens.
 class _MenuItemState extends State<_MenuItem> {
+  final focus = FocusNode();
   var hovered = false;
+
+  @override
+  void dispose() {
+    focus.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => Semantics(
         button: true,
         selected: widget.checked,
         label: widget.text,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          onEnter: (_) => setState(() => hovered = true),
-          onExit: (_) => setState(() => hovered = false),
+        child: FocusableActionDetector(
+          focusNode: focus,
+          autofocus: widget.checked,
+          mouseCursor: SystemMouseCursors.click,
+          shortcuts: pressKeys,
+          actions: {ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) => widget.onTap())},
+          onFocusChange: (value) => setState(() => hovered = value),
+          onShowHoverHighlight: (value) {
+            if (value) focus.requestFocus();
+          },
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: widget.onTap,

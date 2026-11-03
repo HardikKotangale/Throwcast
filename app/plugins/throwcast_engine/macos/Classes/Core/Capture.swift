@@ -50,6 +50,15 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func start() async throws { try await stream.startCapture() }
 
+    /// Starts or stops taking the browser's own sound, without restarting the stream.
+    func setSystemAudio(_ on: Bool) async {
+        guard settings.capturesAudio != on else { return }
+        settings.capturesAudio = on
+        if on { try? stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue) }
+        try? await stream.updateConfiguration(settings)
+        if !on { try? stream.removeStreamOutput(self, type: .audio) }
+    }
+
     /// Changes the part of the window that's captured, without restarting the stream.
     func setCrop(_ crop: CGRect) async {
         settings.sourceRect = crop

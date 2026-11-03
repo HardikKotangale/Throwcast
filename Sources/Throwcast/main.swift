@@ -46,7 +46,9 @@ func runHeadless(host: String) {
         config.fps = option("fps").flatMap(Int.init) ?? 60
         config.color = option("color").flatMap(ColorMode.init) ?? .accurate
         config.quality = option("quality").flatMap(Quality.init) ?? .better
-        config.smooth = option("playback") != "low"
+        config.delayMs = ["smooth": 400, "balanced": 100, "instant": 33, "low": 33][option("playback") ?? "smooth"] ?? 400
+        config.udp = option("transport") == "udp"
+        config.codec = option("codec").flatMap(VideoCodec.init) ?? .hevc
         config.bitrateMbps = option("bitrate").flatMap(Int.init)
         let source: CastSource = switch option("source") {
         case "mirror": .mirror
@@ -63,7 +65,7 @@ func runHeadless(host: String) {
             default: break
             }
         }
-        session.onStats = { print(String(format: "tv %.0f fps  captured %.0f  encoded %.0f  %.1f Mbps  target %.0f  rtt %.0f ms  gap %.0f ms  dropped %d", $0.fps, $0.capturedFps, $0.encodedFps, $0.mbps, $0.bitrateMbps, $0.rttMs, $0.maxGapMs, $0.dropped)) }
+        session.onStats = { print(String(format: "tv %.0f fps  captured %.0f  encoded %.0f  %.1f Mbps  target %.0f  rtt %.0f ms  gap %.0f ms  dropped %d  lost %d", $0.fps, $0.capturedFps, $0.encodedFps, $0.mbps, $0.bitrateMbps, $0.rttMs, $0.maxGapMs, $0.dropped, $0.lost) + ($0.udpReport.isEmpty ? "" : "  udp[\($0.udpReport)]")) }
         session.start()
         print("launch:", await tv.launchReceiver())
         try await Task.sleep(for: .seconds(option("seconds").flatMap(Double.init) ?? 20))

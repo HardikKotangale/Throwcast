@@ -3,7 +3,7 @@ var PORT = 47120;
 var PROBE_PORT = 47121;
 var HEADER = 16;
 
-var state = { socket: null, playerReady: false, wasmReady: false, config: null, frames: 0, bytes: 0, errors: 0, video: [], audio: [], clock: null, lastFrameAt: 0, maxGap: 0 };
+var state = { lost: 0, socket: null, playerReady: false, wasmReady: false, config: null, frames: 0, bytes: 0, errors: 0, video: [], audio: [], clock: null, lastFrameAt: 0, maxGap: 0 };
 var dom = {
   idle: document.getElementById('idle'), status: document.getElementById('status'),
   detail: document.getElementById('detail'), hud: document.getElementById('hud')
@@ -15,7 +15,8 @@ function say(status, detail) {
 }
 
 function capabilities() {
-  var caps = { type: 'hello', hdr: false };
+  // udp: this app can receive the stream over UDP, so the Mac may choose it.
+  var caps = { type: 'hello', hdr: false, udp: true };
   try { caps.hdr = webapis.avinfo.isHdrTvSupport(); } catch (e) {}
   return caps;
 }
@@ -27,7 +28,9 @@ function send(message) {
 var Module = {
   noExitRuntime: true,
   onPlayer: function (message) {
-    if (message === 'ready') {
+    if (message === 'udp-ready') {
+      return;
+    } else if (message === 'ready') {
       state.playerReady = true;
       dom.idle.className = 'casting';
       send({ type: 'ready' });
@@ -49,7 +52,34 @@ var Module = {
 
 function startPlayer() {
   var c = state.config;
-  Module._tc_start(c.width, c.height, c.fps, c.main10 ? 1 : 0);
+  Module._tc_start(c.width, c.height, c.fps, c.main10 ? 1 : 0, c.codec === 'h264' ? 1 : 0);
+  // Over UDP the stream comes in on a background thread in the player; this side collects it.
+  if (c.udp && state.socket) {
+    var parts = state.socket.host.split('.');
+    var mac = ((+parts[0] << 24) >>> 0) + (+parts[1] << 16) + (+parts[2] << 8) + +parts[3];
+    state.udpOut = Module._tc_udp_start(mac, c.delay != null ? c.delay : (c.smooth ? 400 : 33));
+    state.udp = true;
+  }
+}
+
+// Frames rebuilt from UDP, in order, handed over the same way WebSocket frames are.
+function collectUdp(now) {
+  // The Mac keeps using the WebSocket until it hears which port the receiver got.
+  if (!state.udpAnnounced && Module._tc_udp_port() > 0) {
+    state.udpAnnounced = true;
+    send({ type: 'udp', port: Module._tc_udp_port() });
+  }
+  var size;
+  while ((size = Module._tc_udp_next()) > 0) onPacket(Module.HEAPU8.slice(state.udpOut, state.udpOut + size).buffer);
+  var lost = Module._tc_udp_lost();
+  if (!lost) return;
+  state.lost += lost;
+  // Frames after a lost one would show broken, so the picture holds until a fresh key frame.
+  state.waitForKey = true;
+  if (!state.askedForKeyAt || now - state.askedForKeyAt > 250) {
+    state.askedForKeyAt = now;
+    send({ type: 'idr' });
+  }
 }
 
 function append(data) {
@@ -80,7 +110,14 @@ function onPacket(data) {
   if (!state.playerReady) return;
   var size = data.byteLength - HEADER;
   if (size <= 0 || size > state.capacity) return;
-  if (new DataView(data).getUint8(0) === 1) state.video.push(data);
+  var view = new DataView(data);
+  if (view.getUint8(0) === 1) {
+    if (state.waitForKey) {
+      if (!view.getUint8(1)) return;
+      state.waitForKey = false;
+    }
+    state.video.push(data);
+  }
   else state.audio.push(data);
 }
 
@@ -94,18 +131,20 @@ function pump(now) {
   requestAnimationFrame(pump);
   var config = state.config;
   if (!config) return;
-  var delay = config.smooth ? 400 : 0;
+  if (state.udp) collectUdp(now);
+  var delay = config.delay != null ? config.delay : (config.smooth ? 400 : 0);
   var head = state.video.length ? state.video[0] : state.audio[0];
   if (!head) return;
   if (state.clock === null) state.clock = now + delay - ptsMs(head);
   var late = now - (ptsMs(head) + state.clock);
   // A stall outlasted the delay. Pick up from here instead of rushing through old frames.
-  if (late > (config.smooth ? 100 : 400)) {
-    state.clock = now + (config.smooth ? 0 : delay) - ptsMs(head);
+  if (late > 100) {
+    state.clock = now + delay - ptsMs(head);
     late = 0;
   }
   // Time lost to a stall comes back too slowly to see.
-  if (state.video.length && ptsMs(state.video[state.video.length - 1]) + state.clock - now > delay + 60) state.clock -= 0.25;
+  // Short buffers catch up faster, so Instant stays instant.
+  if (state.video.length && ptsMs(state.video[state.video.length - 1]) + state.clock - now > delay + 60) state.clock -= delay < 100 ? 1 : 0.25;
   // The screen shows one frame per refresh, so a second one in the same refresh would never be seen.
   var room = late > 20 ? 2 : 1;
   while (room-- && state.video.length && ptsMs(state.video[0]) + state.clock <= now + 4) append(state.video.shift());
@@ -310,8 +349,9 @@ function report() {
   var at = performance.now();
   var seconds = state.reportedAt ? (at - state.reportedAt) / 1000 : 1;
   state.reportedAt = at;
-  var line = { type: 'stats', fps: state.frames / seconds, mbps: state.bytes * 8 / 1e6 / seconds, errors: state.errors, maxGapMs: state.maxGap };
-  state.frames = state.bytes = state.errors = state.maxGap = 0;
+  var line = { type: 'stats', lost: state.lost, fps: state.frames / seconds,
+    udp: state.udp ? { state: Module._tc_udp_state(), in: Module._tc_udp_in(), refused: Module._tc_udp_refused(), frames: Module._tc_udp_frames(), asked: Module._tc_udp_asked() } : undefined, mbps: state.bytes * 8 / 1e6 / seconds, errors: state.errors, maxGapMs: state.maxGap };
+  state.frames = state.bytes = state.errors = state.maxGap = state.lost = 0;
   if (state.playerReady) {
     send(line);
     if (!dom.hud.hidden && state.config) {

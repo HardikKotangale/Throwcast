@@ -27,6 +27,8 @@ final class WebSocketServer {
         let parameters = NWParameters(tls: nil, tcp: tcp)
         parameters.defaultProtocolStack.applicationProtocols.insert(socket, at: 0)
         parameters.allowLocalEndpointReuse = true
+        // Wi-Fi's video queue (WMM AC_VI) for the stream, ahead of downloads when the air is busy.
+        parameters.serviceClass = .interactiveVideo
         let listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: Wire.port)!)
         listener.newConnectionHandler = { [weak self] in self?.accept($0) }
         listener.start(queue: queue)

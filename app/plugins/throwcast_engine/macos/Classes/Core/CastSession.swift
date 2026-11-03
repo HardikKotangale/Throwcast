@@ -1,4 +1,5 @@
 import CoreGraphics
+import QuartzCore
 import CoreImage
 import CoreVideo
 import Foundation
@@ -18,6 +19,10 @@ public struct CastStats: Sendable {
     public var maxGapMs = 0.0
     public var bitrateMbps = 0.0
     public var encodedFps = 0.0
+    /// Frames the TV gave up on over UDP in the last second.
+    public var lost = 0
+    /// The TV's own account of the UDP stream, for diagnosing it.
+    public var udpReport = ""
     public var capturedFps = 0.0
     public init() {}
 }
@@ -67,6 +72,10 @@ public final class CastSession {
     private var hasFreshFrame = false
     private var holdingPicture = false
     private var windowSize: CGSize?
+    /// When a tab's own sound last arrived. Without it for a while, the browser's sound stands in.
+    private var tabAudioAt: Double?
+    private var usingSystemAudio = false
+    private var udp: MediaUDP?
     private var appliedCrop: CGRect?
     private var adjustments: Adjustments
     private lazy var adjuster = FrameAdjuster()
@@ -135,6 +144,7 @@ public final class CastSession {
     /// A tab's sound from the extension. It's stamped as it arrives, ending now, on the video's clock.
     public func sendTabAudio(_ pcm: Data) {
         guard let capture, let now = capture.now(), pcm.count >= 4 else { return }
+        lock.withLock { tabAudioAt = CACurrentMediaTime() }
         let gain = Float(lock.withLock { config.volume })
         var samples = pcm
         if gain < 0.999 {
@@ -146,7 +156,7 @@ public final class CastSession {
             }
         }
         let seconds = Double(pcm.count / 4) / 48_000
-        server.sendBinary(Wire.packet(kind: Wire.audio, key: true, pts: max(0, now - seconds), payload: samples))
+        sendMedia(Wire.packet(kind: Wire.audio, key: true, pts: max(0, now - seconds), payload: samples))
     }
 
     /// Mission Control shrinks every window, and every kind of capture sees the shrunken picture.
@@ -168,6 +178,7 @@ public final class CastSession {
         timers.forEach { $0.cancel() }
         pacer?.cancel()
         server.stop()
+        lock.withLock { udp }?.stop()
         let capture = capture
         Task {
             await capture?.stop()
@@ -180,11 +191,20 @@ public final class CastSession {
     private func handle(_ message: [String: Any]) {
         switch message["type"] as? String {
         case "hello":
+            // UDP only if both ends speak it; an older TV app quietly gets TCP.
+            if !(config.udp && message["udp"] as? Bool == true) { config.udp = false }
             // An SDR TV would show HDR as washed out, so it gets Accurate instead.
             if config.color == .hdr, message["hdr"] as? Bool == false { config.color = .srgb }
             server.sendText(config.json())
         case "ready":
             Task { await beginCapture() }
+        case "udp":
+            // The TV's receiver is listening. Until now the stream went by WebSocket, and stays there if
+            // this never comes, so the picture never waits on UDP.
+            if config.udp, let port = message["port"] as? Int, (1 ... 65535).contains(port) {
+                lock.withLock { udp?.stop(); udp = MediaUDP(host: host, port: UInt16(port)) }
+                encoder?.requestKeyFrame()
+            }
         case "idr":
             encoder?.requestKeyFrame()
         case "pong":
@@ -196,6 +216,11 @@ public final class CastSession {
                 stats.fps = message["fps"] as? Double ?? 0
                 stats.mbps = message["mbps"] as? Double ?? 0
                 stats.maxGapMs = message["maxGapMs"] as? Double ?? 0
+                stats.lost = message["lost"] as? Int ?? 0
+                if var udpReport = message["udp"] as? [String: Any] {
+                    udpReport["resent"] = udp?.takeResent() ?? 0
+                    stats.udpReport = udpReport.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
+                }
             }
         case "error":
             finish(.failed("The TV reported: \(message["message"] as? String ?? "unknown error")"))
@@ -214,7 +239,7 @@ public final class CastSession {
             let encoder = try HEVCEncoder(config: config) { [weak self] data, key, pts in
                 guard let self else { return }
                 self.lock.withLock { self.encodedCount += 1 }
-                self.server.sendBinary(Wire.packet(kind: Wire.video, key: key, pts: pts, payload: data))
+                self.sendMedia(Wire.packet(kind: Wire.video, key: key, pts: pts, payload: data))
             }
             let capture = try Capture(filter: await makeFilter(), config: config, crop: sourceCrop)
             capture.volume = Float(config.volume)
@@ -225,10 +250,12 @@ public final class CastSession {
             capture.onVideo = { [weak self] pixels, pts in self?.video(pixels, pts: pts) }
             capture.onAudio = { [weak self] pcm, pts in
                 guard let self else { return }
-                self.server.sendBinary(Wire.packet(kind: Wire.audio, key: true, pts: pts, payload: pcm))
+                self.sendMedia(Wire.packet(kind: Wire.audio, key: true, pts: pts, payload: pcm))
             }
             self.encoder = encoder
             self.capture = capture
+            // The tab's sound gets a moment to start flowing before anything stands in for it.
+            lock.withLock { tabAudioAt = CACurrentMediaTime() }
             try await capture.start()
             onState?(.casting)
         } catch {
@@ -312,7 +339,7 @@ public final class CastSession {
         guard let frame else { return }
         // Skipping before the encoder keeps every sent frame decodable. Smooth has 0.4 s of buffer
         // on the TV, so a late frame is still on time and only a long stall is worth skipping for.
-        if server.inflightBytes > bitrate / 8 / (config.smooth ? 2 : 8) {
+        if server.inflightBytes > bitrate / 8 * max(config.delayMs, 125) / 1000 {
             lock.withLock { stats.dropped += 1 }
             return
         }
@@ -328,7 +355,9 @@ public final class CastSession {
         let backlogMs = server.inflightBytes * 8000 / max(config.bitrate, 1)
         // Only network signals: a low TV frame rate can come from the encoder holding its target,
         // and lowering the target for that would drop even more frames.
-        let struggling = config.smooth ? backlogMs > 300 || rtt > 350 : backlogMs > 80 || rtt > 150
+        // Over UDP nothing backs up on the Mac, so the TV's lost frames are the sign of a struggling link.
+        let lost = lock.withLock { stats.lost }
+        let struggling = (backlogMs > max(80, config.delayMs * 3 / 4) || rtt > Double(max(150, config.delayMs * 7 / 8))) || (lock.withLock { udp } != nil && lost > 2)
         var next = bitrate
         if struggling {
             calmChecks = 0
@@ -368,6 +397,22 @@ public final class CastSession {
         Task { await capture.setCrop(next) }
     }
 
+    /// Video and sound go by UDP when that was chosen and the TV supports it; text always stays on the WebSocket.
+    private func sendMedia(_ packet: Data) {
+        if let udp = lock.withLock({ udp }) { udp.send(packet) } else { server.sendBinary(packet) }
+    }
+
+    /// The tab's sound can stop, for instance after the lid closes and opens. The TV shouldn't go
+    /// quiet, so the browser's sound fills in until the tab's comes back, and then steps aside.
+    private func watchTabAudio() {
+        guard !config.capturesAudio, let capture else { return }
+        let silentFor = lock.withLock { tabAudioAt.map { CACurrentMediaTime() - $0 } ?? .infinity }
+        let wanted = silentFor > 2.5
+        guard wanted != usingSystemAudio else { return }
+        usingSystemAudio = wanted
+        Task { await capture.setSystemAudio(wanted) }
+    }
+
     private func startTimers() {
         func every(_ seconds: Double, _ body: @escaping (CastSession) -> Void) {
             let timer = DispatchSource.makeTimerSource(queue: timerQueue)
@@ -389,6 +434,7 @@ public final class CastSession {
             session.adaptBitrate()
         }
         every(1) { session in
+            session.watchTabAudio()
             session.sendPreview()
             session.onStats?(session.lock.withLock {
                 session.stats.encodedFps = Double(session.encodedCount)

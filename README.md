@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/icon.png" width="128" alt="Throwcast icon">
+<img src="docs/assets/icon.png" width="128" alt="Throwcast icon">
 
 # Throwcast
 
@@ -11,8 +11,8 @@ No stick, no cable.
 
 <a href="../../releases/latest/download/Throwcast.dmg">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/download-macos-dark.png">
-    <img src="docs/download-macos.png" alt="Download Throwcast for macOS" width="336">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/download-macos-dark.png">
+    <img src="docs/assets/download-macos.png" alt="Download Throwcast for macOS" width="336">
   </picture>
 </a>
 
@@ -23,7 +23,7 @@ No stick, no cable.
 
 </div>
 
-<img src="docs/demo.gif" width="100%" alt="Choosing what to show, picking 4K, casting the open-source film Big Buck Bunny, and the frames the TV received at 3840 by 2160 and 59.5 FPS with no dropped frames">
+<img src="docs/assets/demo.webp" width="100%" alt="Choosing what to show; picking 4K from Full HD, 2K and 4K; choosing the delay, TCP or UDP, and the Mac's encoder; casting the open-source film Big Buck Bunny with play controls; and the frames the TV received at 3840 by 2160 and 59.5 FPS with no dropped frames">
 
 > [!NOTE]
 > Only tested on a **Samsung AU8000 55"** (Tizen 6.5). Other Samsung TVs from 2020 on should work but haven't been tried, so [let us know](../../issues) how yours does.
@@ -32,9 +32,11 @@ No stick, no cable.
 
 - **Real 4K, 2K or 1080p.** The TV gets its own resolution, not a stretched-up picture.
 - **Steady 60 FPS.** Measured on the TV, 59.5 FPS on average with 0 dropped frames ([details](docs/DETAILS.md#a-real-cast-measured)).
+- **Delay you choose.** Smooth (0.4 s) for films, Balanced (0.1 s) for everyday use, or Instant (0.03 s) for mouse and typing, over TCP or UDP ([details](docs/DETAILS.md#delay-and-network)).
+- **Any Apple silicon Mac.** Throwcast checks which hardware encoders your Mac has, HEVC or H.264, and offers only those.
 - **Any browser tab.** Just the video, filling the TV, on almost any site, live streams included.
-- **Sound where it belongs.** A cast tab plays on the TV, and your Mac keeps its own sound.
-- **Simple.** Good, Better or Best, five color styles, and play controls on your Mac.
+- **Sound where it belongs.** A cast tab plays on the TV, keeps playing after the Mac sleeps, and your Mac keeps its own sound.
+- **Simple for everyone.** Good, Better or Best, five color styles, play controls on your Mac, and every control works from the keyboard and with VoiceOver.
 
 ## Get started
 
@@ -47,7 +49,7 @@ Then open Throwcast and press **Show on TV**.
 ## Learn more
 
 - [Install guide](docs/INSTALL.md): every step, building from source and making a DMG
-- [How it works](docs/DETAILS.md): resolution, the measured cast, how it got to 60 FPS, privacy, permissions and limits
+- [How it works](docs/DETAILS.md): resolution, delay and network, the measured cast, how it got to 60 FPS, privacy, permissions and limits
 - [Notices](NOTICE.md): credits, licenses and trademarks
 - [Releasing](docs/RELEASING.md): building, signing and publishing the DMG, for maintainers
 

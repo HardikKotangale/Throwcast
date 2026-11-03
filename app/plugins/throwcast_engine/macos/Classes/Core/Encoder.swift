@@ -5,8 +5,9 @@ import VideoToolbox
 
 public enum EncoderError: Error { case create(OSStatus), rejected(String, OSStatus) }
 
-/// Hardware HEVC encoder. No B-frames: every frame is decodable on arrival, which is what keeps delay low.
+/// Hardware HEVC or H.264 encoder. No B-frames: every frame is decodable on arrival, which is what keeps delay low.
 public final class HEVCEncoder {
+    private var evenFrames = false
     public typealias Output = (_ annexB: Data, _ key: Bool, _ pts: Double) -> Void
 
     private let session: VTCompressionSession
@@ -22,7 +23,7 @@ public final class HEVCEncoder {
         let spec: [CFString: Any] = [kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true]
         var made: VTCompressionSession?
         let status = VTCompressionSessionCreate(allocator: nil, width: Int32(config.width), height: Int32(config.height),
-                                                codecType: kCMVideoCodecType_HEVC, encoderSpecification: spec as CFDictionary,
+                                                codecType: config.codec.codecType, encoderSpecification: spec as CFDictionary,
                                                 imageBufferAttributes: nil, compressedDataAllocator: nil,
                                                 outputCallback: nil, refcon: nil, compressionSessionOut: &made)
         guard status == noErr, let made else { throw EncoderError.create(status) }
@@ -44,6 +45,12 @@ public final class HEVCEncoder {
             let status = VTSessionSetProperty(session, key: key, value: value)
             if status != noErr { throw EncoderError.rejected(key as String, status) }
         }
+        // Like OBS's low-latency profiles: speed before a little quality. Not MaxFrameDelayCount 0: with
+        // B-frames already off it gains nothing, and it made this encoder skip frames (measured 52 to 55 FPS).
+        evenFrames = !config.smooth
+        if evenFrames {
+            VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
+        }
         setBitrate(config.bitrate)
         if config.color == .hdr {
             VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MasteringDisplayColorVolume, value: config.masteringDisplay as CFData)
@@ -61,7 +68,10 @@ public final class HEVCEncoder {
     /// Takes effect on the next frame, so a busy network costs some sharpness instead of frames.
     public func setBitrate(_ bitsPerSecond: Int) {
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitsPerSecond as CFNumber)
-        let limit = [Double(bitsPerSecond) / 8 * 2, 1.0] as CFArray
+        let perSecond = Double(bitsPerSecond) / 8
+        // A cap on each single frame makes this encoder drop whole frames on fast motion (measured: 37 to
+        // 50 FPS at Instant), so the low-delay modes only hold each second closer to the average.
+        let limit = [perSecond * (evenFrames ? 1.5 : 2), 1.0] as CFArray
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: limit)
     }
 
