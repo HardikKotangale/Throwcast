@@ -40,6 +40,38 @@ final class WireTests: XCTestCase {
         XCTAssertTrue(VideoCodec.available.contains(.hevc))
     }
 
+    func testCroppedPictureIsCentered() {
+        // A browser page below its toolbar, wider than 16:9: full width, with equal bars above and below.
+        let rect = Capture.centered(CGSize(width: 1512, height: 762), in: CGSize(width: 3840, height: 2160))
+        XCTAssertEqual(rect.width, 3840, accuracy: 1)
+        XCTAssertEqual(rect.minY, 2160 - rect.maxY, accuracy: 1)
+    }
+
+    func testHiddenWindowWithNoPictureIsBlank() {
+        func image(_ fill: CGColor?) -> CGImage {
+            let context = CGContext(data: nil, width: 64, height: 40, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            if let fill { context.setFillColor(fill); context.fill(CGRect(x: 0, y: 0, width: 64, height: 40)) }
+            return context.makeImage()!
+        }
+        XCTAssertTrue(Engine.isBlank(image(nil)))                                   // transparent
+        XCTAssertTrue(Engine.isBlank(image(CGColor(red: 0, green: 0, blue: 0, alpha: 1))))  // black
+        XCTAssertFalse(Engine.isBlank(image(CGColor(red: 0.9, green: 0.9, blue: 0.9, alpha: 1))))  // a light window
+    }
+
+    func testWindowTakesTheTVShapeInsideTheScreen() {
+        // A MacBook Air's usable area below the menu bar, and a 16:9 TV: as wide as the screen, centered.
+        let area = CGRect(x: 0, y: 33, width: 1470, height: 923)
+        let fit = WindowFit.shaped(in: area, aspect: 16 / 9)
+        XCTAssertEqual(fit.width, 1470, accuracy: 1)
+        XCTAssertEqual(fit.width / fit.height, 16 / 9, accuracy: 0.01)
+        XCTAssertEqual(fit.midY, area.midY, accuracy: 1)
+        // A tall screen is limited by its height instead.
+        let tall = WindowFit.shaped(in: CGRect(x: 0, y: 0, width: 1000, height: 400), aspect: 16 / 9)
+        XCTAssertEqual(tall.height, 400, accuracy: 1)
+        XCTAssertEqual(tall.midX, 500, accuracy: 1)
+    }
+
     func testCropFollowsTheWindow() {
         let original = CGRect(x: 0, y: 88, width: 1920, height: 1080)
         let start = CGSize(width: 1920, height: 1168)

@@ -56,7 +56,7 @@ Then open Throwcast and press **Show on TV**.
 
 ## Learn more
 
-- [Install guide](docs/INSTALL.md): every step, building from source and making a DMG
+- [Install guide](docs/INSTALL.md): every step, building from source, and uninstalling cleanly
 - [How it works](docs/DETAILS.md): resolution, delay and network, the measured cast, how it got to 60 FPS, privacy, permissions and limits
 - [Notices](NOTICE.md): credits, licenses and trademarks
 - [Releasing](docs/RELEASING.md): building, signing and publishing the DMG, for maintainers

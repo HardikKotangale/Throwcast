@@ -42,4 +42,19 @@ After an update, stop any cast, click **reload ↻** on the extension, and refre
 
 - **Your Mac:** open Throwcast, choose **What to Show**, and press **Show on TV**.
 - **A browser tab:** keep Throwcast open, click the extension on the page, and press **Show This Tab on TV**. The tab moves to a private display that only the TV sees. **Stop Casting** in the app or the extension brings it back, and closing the tab ends the cast too.
+- **A browser window with One Window:** the page shows on the TV as it is. Go full screen on a video (**F**, a double-click or the player's button) and it fills the TV instead, with play controls in Throwcast; **Escape** or full screen again goes back. This needs the extension too.
 - **On the TV remote:** **Enter** shows picture stats, and **Back** closes the app.
+
+## Uninstalling
+
+macOS keeps an app's permissions and settings after the app is deleted, so remove Throwcast from inside it: **More Options > Uninstall Throwcast…**. It resets its Screen Recording and other permissions, deletes your settings and color profiles, and moves the app to the Trash.
+
+Already deleted the app? Run this in Terminal to remove what it left behind:
+
+```sh
+tccutil reset All local.throwcast.app
+rm -rf ~/Library/Application\ Support/Throwcast
+defaults delete local.throwcast.app
+```
+
+The TV app and the browser extension are removed separately: on the TV, from **Apps**, and in the browser, with **Remove** on its extensions page.

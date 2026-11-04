@@ -133,6 +133,12 @@ public final class CastSession {
         capture?.volume = Float(value)
     }
 
+    /// Shows only part of the window from now on, without restarting.
+    public func setCrop(_ rect: CGRect) {
+        guard let capture = lock.withLock({ capture }) else { return }
+        Task { await capture.setCrop(rect) }
+    }
+
     /// The picture inside a browser window that changed size since the cast began, such as after F made the
     /// page fullscreen: the TV's shape, as large as fits, centered. Fullscreen has no title bar to leave out.
     static func crop(original: CGRect, startSize: CGSize, nowSize: CGSize, aspect: CGFloat) -> CGRect {
@@ -146,7 +152,9 @@ public final class CastSession {
 
     /// A tab's sound from the extension. It's stamped as it arrives, ending now, on the video's clock.
     public func sendTabAudio(_ pcm: Data) {
-        guard let capture, let now = capture.now(), pcm.count >= 4 else { return }
+        // Only a tab cast takes the tab's own sound. Any other cast records its sound from macOS, and
+        // the extension's tab sound, still flowing from an earlier tab cast, would play over it out of step.
+        guard !config.capturesAudio, let capture, let now = capture.now(), pcm.count >= 4 else { return }
         lock.withLock { tabAudioAt = CACurrentMediaTime() }
         let gain = Float(lock.withLock { config.volume })
         var samples = pcm

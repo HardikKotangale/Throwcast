@@ -1,12 +1,53 @@
 // Runs in every frame of a page. Reports the main video, and while on the TV makes it fill the picture.
 let reporting;
 let size;
+// One Window is showing this tab's browser window: the page shows as it is until the user asks for
+// full screen, which fills the TV with the video instead.
+let watching = false;
+let preferredSize = 'cover';
 let volumeSlider;
 
 // Live streams report a length that's endless, absurd (Twitch says about 34 years), marked live by the
 // player, or growing a little at a time as you watch. An unknown length while loading proves nothing, and
 // neither does one jump from an ad to the video, so a normal video isn't mistaken for live.
+// YouTube says so in its page data: a broadcast with a start and no end yet is live now; one with an end
+// was live once. Its length looks like a normal video's (the stream so far) and grows only while it
+// downloads, so a paused or rewound stream showed as a plain video without this.
+// YouTube's player shows its Live button only on live streams, wherever you came from in the site.
+function youtubeBadge(video) {
+  const badge = video.closest('.html5-video-player')?.querySelector('.ytp-live-badge');
+  return badge && getComputedStyle(badge).display !== 'none' ? badge : null;
+}
+
+// Where a YouTube live stream really is, from YouTube's own player, which fullscreen.js reaches in the page's
+// world. The video's own clock and "seekable" range don't match the stream: the seekable end can be hours
+// or days past what exists yet, and setting its time is ignored. A command moves the player first.
+function youtube(command = {}) {
+  const player = location.hostname.endsWith('youtube.com') && document.getElementById('movie_player');
+  if (!player) return null;
+  document.dispatchEvent(new CustomEvent('throwcast-youtube', { detail: JSON.stringify(command) }));
+  try {
+    const progress = JSON.parse(player.dataset.throwcastProgress);
+    return Number.isFinite(progress.current) && progress.end > 0 ? progress : null;
+  } catch {
+    return null;
+  }
+}
+
+function youtubeLive(video) {
+  if (!/(^|\.)youtube\.com$/.test(location.hostname)) return false;
+  if (youtubeBadge(video)) return true;
+  const publication = document.querySelector('[itemprop="publication"]');
+  const meta = (name) => publication?.querySelector(`[itemprop="${name}"]`)?.getAttribute('content');
+  // The page data must be this video's, not one left over from the last video in the same page.
+  const shown = document.querySelector('meta[itemprop="identifier"]')?.getAttribute('content');
+  const wanted = new URLSearchParams(location.search).get('v') ?? location.pathname.match(/^\/(?:live|shorts)\/([\w-]{11})/)?.[1];
+  if (shown && wanted && shown !== wanted) return false;
+  return meta('isLiveBroadcast') === 'True' && !meta('endDate');
+}
+
 function isLive(video) {
+  if (youtubeLive(video)) return true;
   const data = video.dataset;
   if (data.throwcastSrc !== video.currentSrc) {
     data.throwcastSrc = video.currentSrc;
@@ -40,6 +81,15 @@ function rewindStart(video) {
 
 function state(video) {
   const live = isLive(video);
+  const stream = live ? youtube() : null;
+  if (stream) {
+    const span = stream.end - stream.start;
+    return {
+      time: stream.current, duration: 0, paused: video.paused, volume: video.muted ? 0 : video.volume, live,
+      behind: Math.max(0, stream.end - stream.current),
+      start: span > 60 && span < 12 * 3600 ? stream.start : null,
+    };
+  }
   return {
     time: video.currentTime || 0,
     duration: live || !Number.isFinite(video.duration) ? 0 : video.duration,
@@ -78,7 +128,7 @@ function report() {
   applyFit();
   const video = mainVideo();
   if (!video) return;
-  chrome.runtime.sendMessage({ type: 'tabState', ...state(video) }).catch(() => {});
+  chrome.runtime.sendMessage({ type: 'tabState', ...state(video), filled: Boolean(size) }).catch(() => {});
 }
 
 // Whichever is bigger: a video in this frame, or a frame that may hold one. Frames inside frames
@@ -158,12 +208,47 @@ function unfit() {
   release();
 }
 
-// F, a double-click or the player's button: the picture is already full, so make sure it stays that way.
-document.addEventListener('throwcast-fullscreen', () => applyFit());
+function watch() {
+  if (watching || size) return;
+  watching = true;
+  // Lets fullscreen.js catch full-screen requests, which would otherwise move the window to its own desktop.
+  document.documentElement.setAttribute('data-throwcast-casting', '');
+  reporting ??= setInterval(report, 500);
+}
+
+function unwatch() {
+  if (!watching) return;
+  watching = false;
+  unfit();
+}
+
+function setFill(on) {
+  if (!watching) return;
+  size = on ? preferredSize : undefined;
+  if (on) applyFit();
+  else release();
+  report();
+}
+
+// Every frame of the tab fills or lets go together, because the video can sit inside a frame.
+const askFill = (on) => chrome.runtime.sendMessage({ type: 'fill', on }).catch(() => {});
+
+// F, a double-click or the player's button. A cast tab is already full, so it stays that way; in a
+// window cast it switches the video between filling the TV and the page as it was.
+document.addEventListener('throwcast-fullscreen', () => (watching ? askFill(!size) : applyFit()));
 // Anything that still gets through, such as Chrome's own video controls, is undone straight away.
 document.addEventListener('fullscreenchange', () => {
-  if (size && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  if (!document.fullscreenElement || !(size || watching)) return;
+  document.exitFullscreen().catch(() => {});
+  if (watching && !size) askFill(true);
 });
+// Escape leaves the fill, as it leaves full screen.
+document.addEventListener('keydown', (event) => {
+  if (watching && size && event.key === 'Escape') {
+    event.stopPropagation();
+    askFill(false);
+  }
+}, true);
 
 // The player's own slider is the short one sitting at the video's volume. A seek bar is wider.
 function findVolumeSlider(video) {
@@ -190,16 +275,29 @@ function setVolume(video, value) {
 
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   if (message === 'ping') respond(true);
-  if (message?.fit) fit(message.fit);
+  if (message?.fit) {
+    if (!watching) fit(message.fit);
+    else {
+      preferredSize = message.fit;
+      if (size) setFill(true);
+    }
+  }
+  if (message?.fill !== undefined) setFill(message.fill);
   if (message === 'unfit') unfit();
   const video = mainVideo();
   if (!video) return false;
   if (message === 'pause') video.pause();
   if (message === 'play') video.play().catch(() => {});
-  if (message?.jump) video.currentTime += message.jump;
-  if (message?.seek !== undefined) video.currentTime = message.seek;
+  // A YouTube live stream moves through its own player, in its own clock; anything else directly.
+  const stream = isLive(video) ? youtube() : null;
+  if (message?.jump) stream ? youtube({ seek: stream.current + message.jump }) : (video.currentTime += message.jump);
+  if (message?.seek !== undefined) stream ? youtube({ seek: message.seek }) : (video.currentTime = message.seek);
   if (message?.volume !== undefined) setVolume(video, message.volume);
-  if (message === 'live') video.currentTime = liveEdge(video) - 1;
+  if (message === 'live') {
+    if (stream) youtube({ live: true });
+    else video.currentTime = liveEdge(video) - 1;
+  }
+
   if (message === 'describe') {
     const src = video.currentSrc || video.src || '';
     respond({ ...state(video), src: /^https?:/.test(src) ? src : '', protected: Boolean(video.mediaKeys) });
@@ -207,5 +305,17 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   return false;
 });
 
+function castCheck() {
+  chrome.runtime.sendMessage({ type: 'castCheck' }).then((mode) => {
+    if (mode === 'window') watch();
+    else if (mode) fit(mode);
+    else unwatch();
+  }).catch(() => {});
+}
+
 // A refreshed page or the next episode picks the cast back up.
-chrome.runtime.sendMessage({ type: 'castCheck' }).then((mode) => mode && fit(mode)).catch(() => {});
+castCheck();
+// A window cast can start or end at any time, so a tab on screen with a video keeps asking, every 2 s.
+setInterval(() => {
+  if (document.visibilityState === 'visible' && (watching || deepAll('video').length)) castCheck();
+}, 2000);
