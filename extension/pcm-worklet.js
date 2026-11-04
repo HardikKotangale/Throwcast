@@ -7,8 +7,9 @@ class Pcm extends AudioWorkletProcessor {
   }
 
   process([input]) {
-    const left = input[0];
-    if (!left) return true;
+    // A paused or quiet tab can give no input at all. It still sends silence, so the Mac doesn't take
+    // the gap for a broken link and switch to the browser's sound, which would cut the audio.
+    const left = input[0] ?? new Float32Array(128);
     const right = input[1] ?? left;
     for (let i = 0; i < left.length; i++) {
       this.block[this.filled * 2] = Math.max(-1, Math.min(1, left[i])) * 32767;

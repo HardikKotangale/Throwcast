@@ -19,6 +19,10 @@ public final class Engine {
     /// The TV's latest report, so the extension and tools can show real numbers.
     private var lastStats: [String: Any]?
     private var tabDisplay: VirtualDisplay?
+    /// A One Window cast's window, resized to the TV's shape until the cast ends.
+    private var fittedWindow: WindowFit?
+    /// The window a One Window cast shows, so the browser extension can tell it's one of its own.
+    private var castWindowID: CGWindowID?
     /// Controls from the app wait here for the extension's next check-in, about twice a second.
     private var tabCommands: [[String: Any]] = []
     private var lastTabCheckIn = Date.distantPast
@@ -47,6 +51,8 @@ public final class Engine {
             startControl()
         case "checkPermission":
             emit(["event": "permission", "screen": CGPreflightScreenCaptureAccess()])
+        case "uninstall":
+            uninstall()
         case "requestPermission":
             _ = CGRequestScreenCaptureAccess()
         case "addTV":
@@ -95,6 +101,9 @@ public final class Engine {
             if let tabVolume { status["tabVolume"] = tabVolume }
             if session != nil, let lastStats { status["stats"] = lastStats }
             if let selected { status["tv"] = ["name": selected.name, "resolution": selected.resolutionLabel] }
+            if session != nil, let castWindowID, let bounds = Self.bounds(of: castWindowID) {
+                status["castWindow"] = ["x": Double(bounds.minX), "y": Double(bounds.minY), "width": Double(bounds.width), "height": Double(bounds.height)]
+            }
             if let direct {
                 let now = direct.status
                 status["playback"] = ["title": direct.title, "state": now.state, "time": now.time, "duration": now.duration, "error": now.error as Any]
@@ -109,13 +118,19 @@ public final class Engine {
             let reported = request.body["volume"] as? Double ?? 1
             // The page gets a moment to apply a change, or the two would briefly stack.
             if let tabVolume, Date().timeIntervalSince(tabVolumeSent) > 1 { session?.setVolume(Self.gain(wanted: tabVolume, reported: reported)) }
-            emit(["event": "tabState", "time": request.body["time"] as? Double ?? 0, "duration": request.body["duration"] as? Double ?? 0,
+            // A browser window cast with One Window has no tab title of its own yet; the page supplies it.
+            let pageTitle: Any = tabDisplay == nil ? request.body["title"] as? String as Any : NSNull()
+            emit(["event": "tabState", "title": pageTitle, "time": request.body["time"] as? Double ?? 0, "duration": request.body["duration"] as? Double ?? 0,
                   "paused": request.body["paused"] as? Bool ?? false, "size": request.body["size"] as? String ?? "cover",
                   "volume": tabVolume ?? reported,
                   "live": request.body["live"] as? Bool ?? false, "behind": request.body["behind"] as? Double ?? 0,
                   "start": request.body["start"] as? Double ?? -1])
             respond(200, ["commands": tabCommands])
             tabCommands = []
+        case ("POST", "/windowCrop"):
+            // One Window on a browser: just the page while its video fills it, the whole window otherwise.
+            if castWindowID != nil, let crop = Self.rect(request.body["crop"] as? [String: Any]) { session?.setCrop(crop) }
+            respond(200, [:])
         case ("POST", "/tabVolume"):
             setTabVolume(Self.volume(request.body))
             respond(200, [:])
@@ -343,26 +358,70 @@ public final class Engine {
         }
     }
 
+    private func restoreWindow() {
+        fittedWindow?.restore()
+        fittedWindow = nil
+        castWindowID = nil
+    }
+
+    /// Where a window is now, in the same points the browser reports its windows in.
+    private static func bounds(of id: CGWindowID) -> CGRect? {
+        guard let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]])?.first,
+              let bounds = info[kCGWindowBounds as String] as? NSDictionary else { return nil }
+        return CGRect(dictionaryRepresentation: bounds)
+    }
+
+    /// Deleting an app leaves its permissions and settings behind, because macOS keeps them outside the
+    /// app and never tells an app it's being deleted. This removes all of it, then moves the app to the Trash.
+    private func uninstall() {
+        session?.stop()
+        stopDirect()
+        tabDisplay = nil
+        let id = Bundle.main.bundleIdentifier ?? "local.throwcast.app"
+        // Screen Recording and every other permission macOS records for this app.
+        let reset = Process()
+        reset.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        reset.arguments = ["reset", "All", id]
+        try? reset.run()
+        reset.waitUntilExit()
+        let files = FileManager.default
+        try? files.removeItem(at: files.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/Throwcast"))
+        UserDefaults.standard.removePersistentDomain(forName: id)
+        // From a disk image or another read-only place this fails, and only the data above is removed.
+        NSWorkspace.shared.recycle([Bundle.main.bundleURL]) { _, _ in
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
+    }
+
     private func sendWindows() {
         Task {
             guard let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false) else { return }
             // Regular apps only: this drops system helpers and invisible overlays.
             let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
-            let candidates: [(SCWindow, NSRunningApplication)] = content.windows.compactMap { window in
+            let found: [(SCWindow, NSRunningApplication)] = content.windows.compactMap { window in
                 guard window.windowLayer == 0, window.title?.isEmpty == false, window.frame.width >= 160, window.frame.height >= 120,
                       let pid = window.owningApplication?.processID, pid != ProcessInfo.processInfo.processIdentifier,
                       let app = apps.first(where: { $0.processIdentifier == pid }) else { return nil }
                 return (window, app)
             }
-            let previews = await withTaskGroup(of: (Int, [String: Any]?).self) { group in
-                for (index, pair) in candidates.prefix(16).enumerated() {
-                    group.addTask { (index, await Self.preview(pair.0, app: pair.1)) }
+            // Every window, with each app's windows together, apps in the order macOS lists them.
+            let appOrder = found.map(\.1.processIdentifier).reduce(into: [pid_t]()) { if !$0.contains($1) { $0.append($1) } }
+            let candidates = appOrder.flatMap { pid in found.filter { $0.1.processIdentifier == pid } }
+            // Previews in batches of 8, so dozens of windows don't capture all at once.
+            var items: [[String: Any]] = []
+            for start in stride(from: 0, to: candidates.count, by: 8) {
+                let batch = candidates[start ..< min(start + 8, candidates.count)]
+                let previews = await withTaskGroup(of: (Int, [String: Any]).self) { group in
+                    for (index, pair) in batch.enumerated() {
+                        group.addTask { (index, await Self.preview(pair.0, app: pair.1)) }
+                    }
+                    var done: [(Int, [String: Any])] = []
+                    for await result in group { done.append(result) }
+                    return done.sorted { $0.0 < $1.0 }.map(\.1)
                 }
-                var found: [(Int, [String: Any])] = []
-                for await (index, item) in group { if let item { found.append((index, item)) } }
-                return found.sorted { $0.0 < $1.0 }.map(\.1)
+                items += previews
             }
-            emit(["event": "windows", "windows": previews])
+            emit(["event": "windows", "windows": items])
         }
     }
 
@@ -381,8 +440,13 @@ public final class Engine {
         }
     }
 
-    /// A small live picture of the window. Nil means macOS can't capture it, such as when minimized.
-    private static func preview(_ window: SCWindow, app: NSRunningApplication) async -> [String: Any]? {
+    /// The window's name and app, with a small picture when macOS can capture one. Most minimized
+    /// windows and ones on another desktop still give their last picture; a few refuse or come back
+    /// blank, and those are listed without one. Either way, hidden ones are marked so the app can say so.
+    private static func preview(_ window: SCWindow, app: NSRunningApplication) async -> [String: Any] {
+        var item: [String: Any] = ["id": Int(window.windowID), "app": app.localizedName ?? "App", "title": window.title ?? "",
+                                   "aspect": window.frame.width / max(window.frame.height, 1), "hidden": !window.isOnScreen]
+        if let png = smallIcon(app.icon) { item["icon"] = png.base64EncodedString() }
         let settings = SCStreamConfiguration()
         let aspect = window.frame.height / max(window.frame.width, 1)
         settings.width = 560
@@ -390,11 +454,22 @@ public final class Engine {
         settings.ignoreShadowsSingleWindow = true
         settings.showsCursor = false
         guard let image = try? await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: window), configuration: settings),
-              let jpeg = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.7]) else { return nil }
-        var item: [String: Any] = ["id": Int(window.windowID), "app": app.localizedName ?? "App", "title": window.title ?? "",
-                                   "image": jpeg.base64EncodedString(), "aspect": window.frame.width / max(window.frame.height, 1)]
-        if let png = smallIcon(app.icon) { item["icon"] = png.base64EncodedString() }
+              !isBlank(image),
+              let jpeg = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.7]) else { return item }
+        item["image"] = jpeg.base64EncodedString()
         return item
+    }
+
+    /// A hidden window macOS has no picture for comes back fully transparent or black.
+    static func isBlank(_ image: CGImage) -> Bool {
+        let width = 24, height = 16
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        // Something visible in at least a few spots: alpha, and any colour above near-black.
+        let lit = stride(from: 0, to: pixels.count, by: 4).filter { pixels[$0 + 3] > 25 && max(pixels[$0], pixels[$0 + 1], pixels[$0 + 2]) > 12 }
+        return lit.count < 4
     }
 
     /// App icons come at up to 1024 pixels, and the tile only needs enough for Retina at 18 points.
@@ -448,9 +523,11 @@ public final class Engine {
                     self.emit(["event": "state", "state": "casting"])
                 case .stopped:
                     self.session = nil
+                    self.restoreWindow()
                     self.emit(["event": "state", "state": "stopped"])
                 case let .failed(reason):
                     self.session = nil
+                    self.restoreWindow()
                     self.emit(["event": "state", "state": "failed", "message": reason])
                     self.lastFailure = reason
                 }
@@ -472,6 +549,23 @@ public final class Engine {
         }
         self.session = session
         session.start()
+        // One Window on a browser: the window takes the TV's shape, like a cast tab does. A tab cast has a crop and
+        // its own display already, so it's left alone.
+        castWindowID = nil
+        if case let .window(id, nil) = source {
+            castWindowID = id
+            let aspect = CGFloat(config.width) / CGFloat(max(config.height, 1))
+            Task { @MainActor [weak self, weak session] in
+                guard let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false),
+                      let window = content.windows.first(where: { $0.windowID == id }),
+                      // Only browsers: their pages reflow to any size. A game or other app that draws at a
+                      // fixed size would keep its old picture in a corner of the bigger window.
+                      Self.browserApps.contains(window.owningApplication?.bundleIdentifier ?? ""),
+                      let pid = window.owningApplication?.processID,
+                      let self, let session, self.session === session else { return }
+                self.fittedWindow = WindowFit.fit(pid: pid, frame: window.frame, aspect: aspect)
+            }
+        }
         // Runs beside the cast, and can take a while on a slow TV. It may only end the cast it was
         // started for, and only if the TV never connected: a TV that said hello has the app open.
         // "Couldn't confirm" doesn't end anything; the 25-second wait for the TV covers that case.

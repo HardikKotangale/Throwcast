@@ -1,3 +1,4 @@
+import { sameWindow } from './geometry.js';
 const API = 'http://127.0.0.1:47122';
 const view = document.getElementById('view');
 const tvLabel = document.getElementById('tv');
@@ -118,7 +119,7 @@ async function castingView(casting, status) {
       scrub.addEventListener('pointerdown', () => { scrubbing = true; });
       scrub.addEventListener('change', () => {
         scrubbing = false;
-        send({ seek: (scrub.value / 1000) * Number(scrub.dataset.duration) });
+        send({ seek: Number(scrub.dataset.from) + (scrub.value / 1000) * Number(scrub.dataset.span) });
       });
       root.querySelectorAll('[data-size]').forEach((button) => button.addEventListener('click', async () => {
         await chrome.storage.local.set({ pictureSize: button.dataset.size });
@@ -144,11 +145,17 @@ async function castingView(casting, status) {
   pill.disabled = !behind;
   pill.querySelector('span').textContent = behind ? 'Go Live' : 'LIVE';
   view.querySelector('.live .note').textContent = behind ? `${clock(video.behind)} behind` : 'Watching live';
-  scrub.hidden = view.querySelector('.times').hidden = video.live || !(video.duration > 0);
-  scrub.dataset.duration = video.duration;
-  if (!scrubbing && video.duration > 0) scrub.value = (video.time / video.duration) * 1000;
-  view.querySelector('#now').textContent = clock(video.time);
-  view.querySelector('#total').textContent = clock(video.duration);
+  // The slider runs over the video, or for a live stream that keeps one, from the oldest moment it can
+  // rewind to up to live.
+  const rewind = video.live && video.start !== null && video.start !== undefined;
+  const from = rewind ? video.start : 0;
+  const span = rewind ? video.time + video.behind - video.start : video.duration;
+  scrub.hidden = view.querySelector('.times').hidden = !(span > 0) || (video.live && !rewind);
+  scrub.dataset.from = from;
+  scrub.dataset.span = span;
+  if (!scrubbing && span > 0) scrub.value = ((video.time - from) / span) * 1000;
+  view.querySelector('#now').textContent = rewind ? `−${clock(video.behind)}` : clock(video.time);
+  view.querySelector('#total').textContent = rewind ? 'Live' : clock(video.duration);
   if (!changingVolume) view.querySelector('#volume').value = (status.tabVolume ?? video.volume) * 100;
   showToggle(video.paused);
 }
@@ -224,7 +231,12 @@ async function refresh() {
   if (status.playback && status.playback.state !== 'ended') return playingView(status.playback);
   if (!status.tv) return message('Choose a TV in Throwcast', 'Your TV needs to be selected in the app first.');
   const { castingTab } = await chrome.storage.local.get('castingTab');
-  if (status.casting) return castingView(castingTab ?? {}, status);
+  if (status.casting && castingTab) return castingView(castingTab, status);
+  // A browser window cast with One Window: the controls work on the tab showing in it.
+  if (status.casting && tab && sameWindow(await chrome.windows.get(tab.windowId).catch(() => null), status.castWindow)) {
+    return castingView({ tabId: tab.id, title: tab.title }, status);
+  }
+  if (status.casting) return castingView({}, status);
   // Stopped from the app, or the app quit: bring the tab home.
   if (castingTab && !shown.startsWith('tab:')) return chrome.runtime.sendMessage({ type: 'endCast' });
   if (!tab?.url?.startsWith('http')) return message('Open a page to cast', 'Then press Show This Tab on TV here.');

@@ -91,6 +91,7 @@ Nothing else has been tested: other Samsung models, Brave, other Macs, or Ethern
 
 - **Screen Recording** is how the Mac app sees what to send. Nothing is saved.
 - **Local Network** lets it find the TV and stream to it.
+- **Accessibility** (optional) lets **One Window** resize a browser window you pick to the TV's shape while it's shown, and put it back afterwards. Without it, the window is shown at its own shape, with bars.
 - **The extension** reads the page you cast so it can fill the TV and control the video, and captures only that tab's sound. Chrome shows that the tab is shared while it does.
 
 ## Privacy

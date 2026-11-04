@@ -14,3 +14,19 @@ if (!window.throwcastFullscreen) {
     };
   }
 }
+
+// YouTube live streams can only be moved through YouTube's own player, which the extension's other script
+// can't reach. It asks here with an event, and reads where the stream is from an attribute on the player.
+if (location.hostname.endsWith('youtube.com') && !window.throwcastYouTube) {
+  window.throwcastYouTube = true;
+  document.addEventListener('throwcast-youtube', (event) => {
+    const player = document.getElementById('movie_player');
+    if (!player?.getProgressState) return;
+    let command = {};
+    try { command = JSON.parse(event.detail); } catch {}
+    if (Number.isFinite(command.seek)) player.seekTo(command.seek, true);
+    if (command.live) player.seekToLiveHead();
+    const progress = player.getProgressState();
+    player.dataset.throwcastProgress = JSON.stringify({ current: progress.current, start: progress.seekableStart, end: progress.seekableEnd });
+  });
+}

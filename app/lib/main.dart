@@ -167,7 +167,7 @@ enum Source {
   window(
     'One Window',
     'window',
-    'Shows just the window you pick. Uses the least power.',
+    'Shows just the window you pick. Browser windows take the TV\'s shape until you stop.',
   );
 
   const Source(this.title, this.wire, this.explanation);
@@ -1662,8 +1662,60 @@ class _HomePageState extends State<HomePage> {
               ),
           ],
         ),
+        const SizedBox(height: 10),
+        Group(
+          children: [
+            Press(
+              scale: 0.99,
+              label: 'Uninstall Throwcast',
+              onTap: _confirmUninstall,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                child: Row(
+                  children: [
+                    const IconBadge(CupertinoIcons.trash, CupertinoColors.systemRed),
+                    const SizedBox(width: 11),
+                    Expanded(
+                      child: Text(
+                        'Uninstall Throwcast…',
+                        style: TextStyle(color: CupertinoColors.systemRed.resolveFrom(context)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ],
     );
+  }
+
+  /// It can't be undone, so it asks first, and says exactly what goes.
+  Future<void> _confirmUninstall() async {
+    final sure = await showCupertinoDialog<bool>(
+      context: context,
+      builder: (context) => CupertinoAlertDialog(
+        title: const Text('Uninstall Throwcast?'),
+        content: const Text(
+          'This removes its Screen Recording and other permissions, your settings and color profiles, '
+          'then moves Throwcast to the Trash. The TV app and the browser extension stay; remove those separately.',
+        ),
+        actions: [
+          CupertinoDialogAction(
+            isDefaultAction: true,
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          CupertinoDialogAction(
+            isDestructiveAction: true,
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Uninstall'),
+          ),
+        ],
+      ),
+    );
+    if (sure == true) engine.send({'cmd': 'uninstall'});
   }
 
   Widget _customBitrateRow() => Padding(
@@ -1799,10 +1851,10 @@ class LivePreview extends StatelessWidget {
             semanticLabel: 'Preview of your screen scaled to fit the TV',
           ),
         );
-      case Source.window when window != null:
+      case Source.window when window?.image != null:
         return Center(
           child: Image.memory(
-            window!.image,
+            window!.image!,
             fit: BoxFit.contain,
             gaplessPlayback: true,
             semanticLabel: 'Preview of ${window!.title}',
@@ -1953,7 +2005,7 @@ class SourceTile extends StatelessWidget {
       ],
     ),
     Source.window =>
-      window == null
+      window?.image == null
           ? const Center(
               child: Icon(
                 CupertinoIcons.macwindow,
@@ -1965,7 +2017,7 @@ class SourceTile extends StatelessWidget {
               padding: const EdgeInsets.all(5),
               child: Center(
                 child: Image.memory(
-                  window!.image,
+                  window!.image!,
                   fit: BoxFit.contain,
                   gaplessPlayback: true,
                 ),
@@ -2155,15 +2207,49 @@ class _WindowTileState extends State<WindowTile> {
                     child: Padding(
                       padding: const EdgeInsets.all(5),
                       child: Center(
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: Image.memory(
-                            window.image,
-                            fit: BoxFit.contain,
-                            gaplessPlayback: true,
-                            semanticLabel: '${window.title} preview',
-                          ),
-                        ),
+                        child: window.image != null
+                            ? Stack(
+                                alignment: Alignment.bottomCenter,
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: Image.memory(
+                                      window.image!,
+                                      fit: BoxFit.contain,
+                                      gaplessPlayback: true,
+                                      semanticLabel: '${window.title} preview',
+                                    ),
+                                  ),
+                                  // Its last picture, but macOS can only cast it once it's back on this desktop.
+                                  if (window.hidden)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 4),
+                                      child: DecoratedBox(
+                                        decoration: BoxDecoration(color: const Color(0xCC000000), borderRadius: BorderRadius.circular(5)),
+                                        child: const Padding(
+                                          padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          child: Text('Hidden · bring it here to cast', style: TextStyle(fontSize: 11, color: CupertinoColors.white)),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              )
+                            // No picture to show, so say why instead of leaving the window out.
+                            : Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (window.icon != null)
+                                    Image.memory(window.icon!, width: 28, height: 28, gaplessPlayback: true)
+                                  else
+                                    Icon(CupertinoIcons.macwindow, size: 26, color: context.secondary),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    window.hidden ? 'Minimized or on another desktop.\nBring it here to cast.' : 'No preview',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(fontSize: 12, height: 1.3, color: context.secondary),
+                                  ),
+                                ],
+                              ),
                       ),
                     ),
                   ),

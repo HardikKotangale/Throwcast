@@ -63,10 +63,13 @@ class Tv {
 }
 
 class WindowInfo {
-  WindowInfo(this.id, this.app, this.title, this.image, this.icon, this.aspect);
+  WindowInfo(this.id, this.app, this.title, this.image, this.icon, this.aspect, {this.hidden = false});
   final int id;
   final String app, title;
-  final Uint8List image;
+
+  /// None when macOS can't capture the window: minimized, or on another desktop.
+  final Uint8List? image;
+  final bool hidden;
   final Uint8List? icon;
   final double aspect;
 }
@@ -160,6 +163,8 @@ class Engine extends ChangeNotifier {
       case 'tvFrame':
         tvFrame = base64Decode(event['image']);
       case 'tabState':
+        // A browser window cast with One Window: its playing video gets the same controls as a cast tab.
+        if (event['title'] is String && state == CastState.casting) tabTitle ??= event['title'] as String;
         tabTime = (event['time'] as num).toDouble();
         tabDuration = (event['duration'] as num).toDouble();
         tabPaused = event['paused'] as bool;
@@ -193,7 +198,15 @@ class Engine extends ChangeNotifier {
         windowsLoaded = true;
         windows = [
           for (final w in event['windows'] as List)
-            WindowInfo(w['id'], w['app'], w['title'], base64Decode(w['image']), w['icon'] == null ? null : base64Decode(w['icon']), (w['aspect'] as num).toDouble()),
+            WindowInfo(
+              w['id'],
+              w['app'],
+              w['title'],
+              w['image'] == null ? null : base64Decode(w['image']),
+              w['icon'] == null ? null : base64Decode(w['icon']),
+              (w['aspect'] as num).toDouble(),
+              hidden: w['hidden'] == true,
+            ),
         ];
       case 'stats':
         final rtt = (event['rttMs'] as num).toDouble();

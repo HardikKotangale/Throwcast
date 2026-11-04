@@ -1,4 +1,4 @@
-import { pageCrop, windowHeightFor } from './geometry.js';
+import { pageCrop, sameWindow, windowHeightFor } from './geometry.js';
 
 // Watches this tab's network traffic for real video links. Nothing leaves the browser until you press Play.
 const PATTERNS = [
@@ -149,16 +149,51 @@ async function endCast() {
   }
 }
 
-async function castSize(tabId) {
-  const { castingTab, pictureSize = 'cover' } = await chrome.storage.local.get(['castingTab', 'pictureSize']);
-  return castingTab?.tabId === tabId ? pictureSize : null;
+// The crop last sent for a window cast, so it's only sent when the fill changes.
+let windowCrop = '';
+
+// The app's status, at most once a second however many tabs ask.
+let status = { at: 0, value: null };
+async function appStatus() {
+  if (Date.now() - status.at > 1000) {
+    status = { at: Date.now(), value: await fetch(API + '/status').then((r) => r.json()).catch(() => null) };
+  }
+  return status.value;
 }
 
-async function checkIn(state, tabId) {
+/// The app is showing this browser window with One Window, and this is the tab on screen in it.
+async function inCastWindow(tab) {
+  if (!tab?.active) return null;
+  const cast = (await appStatus())?.castWindow;
+  if (!cast) windowCrop = '';
+  const window = cast && (await chrome.windows.get(tab.windowId).catch(() => null));
+  if (!window) return null;
+  return sameWindow(window, cast) ? window : null;
+}
+
+/// 'cover' or 'contain' for the cast tab, 'window' for a tab in a window cast with One Window.
+async function castMode(tab) {
   const { castingTab, pictureSize = 'cover' } = await chrome.storage.local.get(['castingTab', 'pictureSize']);
+  if (castingTab?.tabId === tab?.id) return pictureSize;
+  return (await inCastWindow(tab)) ? 'window' : null;
+}
+
+async function checkIn(state, tab) {
+  const { castingTab, pictureSize = 'cover' } = await chrome.storage.local.get(['castingTab', 'pictureSize']);
+  const window = castingTab?.tabId === tab.id ? null : await inCastWindow(tab);
   // A tab left over from an earlier cast must not speak for this one, or take its controls.
-  if (castingTab?.tabId !== tabId) return chrome.tabs.sendMessage(tabId, 'unfit').catch(() => {});
-  const { commands = [] } = await post('/tabState', { time: state.time, duration: state.duration, paused: state.paused, volume: state.volume, live: state.live, behind: state.behind, start: state.start, size: pictureSize });
+  if (castingTab?.tabId !== tab.id && !window) return chrome.tabs.sendMessage(tab.id, 'unfit').catch(() => {});
+  if (window) {
+    // While its video fills the page, the TV shows only the page, as for a cast tab; otherwise the whole window.
+    const crop = state.filled ? pageCrop(window, tab) : { x: 0, y: 0, width: window.width, height: window.height };
+    const key = JSON.stringify(crop);
+    if (key !== windowCrop) {
+      windowCrop = key;
+      await post('/windowCrop', { crop }).catch(() => {});
+    }
+  }
+  const tabId = tab.id;
+  const { commands = [] } = await post('/tabState', { title: tab.title, time: state.time, duration: state.duration, paused: state.paused, volume: state.volume, live: state.live, behind: state.behind, start: state.start, size: pictureSize });
   for (const command of commands) {
     if (command.stop) await endCast();
     else if (command.action) chrome.tabs.sendMessage(tabId, command.action === 'seek' ? { seek: command.seconds } : command.action === 'jump' ? { jump: command.seconds } : command.action).catch(() => {});
@@ -172,12 +207,17 @@ async function checkIn(state, tabId) {
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.type === 'tabState' && sender.tab) {
-    checkIn(message, sender.tab.id).catch(() => {});
+    checkIn(message, sender.tab).catch(() => {});
     return false;
   }
   if (message?.type === 'castCheck') {
-    castSize(sender.tab?.id).then(respond);
+    castMode(sender.tab).then(respond);
     return true;
+  }
+  // Full screen in one frame of a window-cast tab: every frame fills or lets go together.
+  if (message?.type === 'fill' && sender.tab) {
+    chrome.tabs.sendMessage(sender.tab.id, { fill: message.on }).catch(() => {});
+    return false;
   }
   if (message?.type === 'castTab') {
     castTab(message.tabId, message.streamId).then(() => respond({}), async (problem) => {

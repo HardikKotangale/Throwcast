@@ -35,7 +35,10 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
         settings.sampleRate = 48_000
         settings.channelCount = 2
         settings.excludesCurrentProcessAudio = true
-        if let crop { settings.sourceRect = crop }
+        if let crop {
+            settings.sourceRect = crop
+            settings.destinationRect = Self.centered(crop.size, in: CGSize(width: config.width, height: config.height))
+        }
         self.settings = settings
         super.init()
         stream = SCStream(filter: filter, configuration: settings, delegate: self)
@@ -62,7 +65,16 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Changes the part of the window that's captured, without restarting the stream.
     func setCrop(_ crop: CGRect) async {
         settings.sourceRect = crop
+        settings.destinationRect = Self.centered(crop.size, in: CGSize(width: settings.width, height: settings.height))
         try? await stream.updateConfiguration(settings)
+    }
+
+    /// ScreenCaptureKit puts a cropped picture in the top-left corner; this centers it, as large as fits.
+    static func centered(_ size: CGSize, in output: CGSize) -> CGRect {
+        let aspect = size.width / max(size.height, 1)
+        let width = min(output.width, output.height * aspect)
+        let height = width / aspect
+        return CGRect(x: (output.width - width) / 2, y: (output.height - height) / 2, width: width, height: height)
     }
 
     func stop() async { try? await stream.stopCapture() }
