@@ -8,8 +8,11 @@
 #include <pthread.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 #include <atomic>
+#include <cerrno>
+#include <deque>
 #include <chrono>
 #include <mutex>
 #include <cstdio>
@@ -28,6 +31,7 @@
 #include "samsung/wasm/operation_result.h"
 #include "samsung/wasm/session_id.h"
 #include "udp_frames.h"
+#include "websocket.h"
 
 using namespace samsung::wasm;
 using samsung::html::HTMLMediaElement;
@@ -207,9 +211,166 @@ void* ReceiveUdp(void*) {
   }
 }
 
+// The browser extension streams here without the Mac app. A browser can only open a WebSocket, so this
+// thread takes it, unwraps each message, and leaves it for the page to collect, the way UDP frames are.
+// One browser at a time; the page decides whether to keep it (a Mac may already be casting).
+constexpr uint16_t kWsPort = 47140, kWsPorts = 10;
+std::atomic<int> g_wsPort{0};
+std::mutex g_wsLock;
+std::deque<throwcast::ws::Message> g_wsIn;  // finished messages, for the page
+std::deque<std::string> g_wsOut;            // the page's replies, for the browser
+std::atomic<bool> g_wsDrop{false};
+// Set before the page reloads. The TV keeps a reloaded page's sockets open, so the listener closes its
+// own port first, or every reload would leave one more port taken and silent.
+std::atomic<bool> g_wsStop{false};
+std::atomic<uint32_t> g_wsOpened{0}, g_wsClosed{0};
+uint8_t* g_wsBuffer;
+bool g_wsLastText;
+
+bool SendAll(int fd, const std::vector<uint8_t>& bytes) {
+  size_t sent = 0;
+  while (sent < bytes.size()) {
+    const ssize_t n = send(fd, bytes.data() + sent, bytes.size() - sent, 0);
+    if (n > 0) sent += size_t(n);
+    else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) usleep(1000);
+    else return false;
+  }
+  return true;
+}
+
+void ServeBrowser(int client) {
+  using namespace throwcast::ws;
+  timeval wait{0, 4000};  // wake often, to send the page's replies and notice a request to close
+  setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof wait);
+  std::vector<uint8_t> buffer(256 * 1024);
+  // The opening HTTP request, up to its blank line, within 3 seconds.
+  std::string request;
+  const double deadline = emscripten_get_now() + 3000;
+  while (request.find("\r\n\r\n") == std::string::npos && request.size() < 8192 && emscripten_get_now() < deadline) {
+    const ssize_t n = recv(client, buffer.data(), buffer.size(), 0);
+    if (n > 0) request.append(reinterpret_cast<char*>(buffer.data()), size_t(n));
+    else if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) break;
+  }
+  const std::string reply = HandshakeReply(request);
+  if (reply.empty() || !SendAll(client, std::vector<uint8_t>(reply.begin(), reply.end()))) {
+    close(client);
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> hold(g_wsLock);
+    g_wsIn.clear();
+    g_wsOut.clear();
+  }
+  g_wsDrop = false;
+  ++g_wsOpened;
+  Reader reader;
+  std::vector<Message> got;
+  std::deque<std::string> replies;
+  bool open = true;
+  while (open && !g_wsStop && !g_wsDrop.exchange(false)) {
+    {
+      std::lock_guard<std::mutex> hold(g_wsLock);
+      replies.swap(g_wsOut);
+    }
+    for (const std::string& text : replies) open = open && SendAll(client, Frame(kText, reinterpret_cast<const uint8_t*>(text.data()), text.size()));
+    replies.clear();
+    const ssize_t n = recv(client, buffer.data(), buffer.size(), 0);
+    if (n == 0) break;
+    if (n < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
+      break;
+    }
+    got.clear();
+    if (!reader.Add(buffer.data(), size_t(n), got)) break;
+    for (Message& message : got) {
+      if (message.opcode == kPing) open = open && SendAll(client, Frame(kPong, message.data.data(), message.data.size()));
+      else if (message.opcode == kClose) open = false;
+      else if (message.opcode == kText || message.opcode == kBinary) {
+        std::lock_guard<std::mutex> hold(g_wsLock);
+        // The page collects every screen refresh. A backlog this long means it's stuck, so stop growing.
+        if (g_wsIn.size() < 600) g_wsIn.push_back(std::move(message));
+      }
+    }
+  }
+  close(client);
+  ++g_wsClosed;
+}
+
+void* ListenForBrowser(void*) {
+  const int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return nullptr;
+  int reuse = 1;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof reuse);
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_ANY);
+  // The first free port: like UDP, a reloaded page can keep the last one for a while.
+  uint16_t port = kWsPort;
+  for (; port < kWsPort + kWsPorts; ++port) {
+    address.sin_port = htons(port);
+    if (bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof address) == 0) break;
+  }
+  if (port == kWsPort + kWsPorts || listen(fd, 2) != 0) return nullptr;
+  // accept() wakes every 200 ms, so a request to stop is noticed.
+  timeval wait{0, 200000};
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof wait);
+  g_wsPort = port;
+  while (!g_wsStop) {
+    const int client = accept(fd, nullptr, nullptr);
+    if (client < 0) {
+      if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) usleep(100000);
+      continue;
+    }
+    ServeBrowser(client);
+  }
+  close(fd);
+  g_wsPort = 0;
+  return nullptr;
+}
+
 }  // namespace
 
 extern "C" {
+
+// Starts listening for the browser extension. Messages are copied to the returned buffer by tc_ws_next.
+EMSCRIPTEN_KEEPALIVE uint8_t* tc_ws_start() {
+  if (!g_wsBuffer) {
+    g_wsBuffer = new uint8_t[kBufferSize + 1];
+    pthread_t thread;
+    pthread_create(&thread, nullptr, ListenForBrowser, nullptr);
+    pthread_detach(thread);
+  }
+  return g_wsBuffer;
+}
+
+EMSCRIPTEN_KEEPALIVE int tc_ws_port() { return g_wsPort; }
+// Browsers that connected, and connections that ended, since the last call.
+EMSCRIPTEN_KEEPALIVE int tc_ws_opened() { return int(g_wsOpened.exchange(0)); }
+EMSCRIPTEN_KEEPALIVE int tc_ws_closed() { return int(g_wsClosed.exchange(0)); }
+
+// Copies the next message to the buffer: its size, or 0 when there's none. Text ends with a 0 byte.
+EMSCRIPTEN_KEEPALIVE int tc_ws_next() {
+  std::lock_guard<std::mutex> hold(g_wsLock);
+  if (g_wsIn.empty()) return 0;
+  throwcast::ws::Message message = std::move(g_wsIn.front());
+  g_wsIn.pop_front();
+  const size_t size = std::min(message.data.size(), kBufferSize);
+  std::memcpy(g_wsBuffer, message.data.data(), size);
+  g_wsBuffer[size] = 0;
+  g_wsLastText = message.opcode == throwcast::ws::kText;
+  return int(size);
+}
+
+EMSCRIPTEN_KEEPALIVE int tc_ws_text() { return g_wsLastText; }
+
+EMSCRIPTEN_KEEPALIVE void tc_ws_send(const char* text) {
+  std::lock_guard<std::mutex> hold(g_wsLock);
+  g_wsOut.emplace_back(text);
+}
+
+EMSCRIPTEN_KEEPALIVE void tc_ws_close() { g_wsDrop = true; }
+// Closes the listener and any browser, before the page reloads.
+EMSCRIPTEN_KEEPALIVE void tc_ws_stop() { g_wsStop = true; }
 
 // Starts receiving the stream over UDP from `mac`, an IPv4 address in host byte order.
 EMSCRIPTEN_KEEPALIVE uint8_t* tc_udp_start(uint32_t mac, int delayMs) {

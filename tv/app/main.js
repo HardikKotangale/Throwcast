@@ -9,6 +9,13 @@ var dom = {
   detail: document.getElementById('detail'), hud: document.getElementById('hud')
 };
 
+// A fresh page is the clean way to reset the video pipeline. The browser listener closes its port first,
+// because the TV keeps a reloaded page's sockets open; 300 ms gives its thread time to notice.
+function reload() {
+  try { Module._tc_ws_stop(); } catch (e) {}
+  setTimeout(function () { location.reload(); }, 300);
+}
+
 function say(status, detail) {
   dom.status.textContent = status;
   dom.detail.textContent = detail || '';
@@ -46,6 +53,7 @@ var Module = {
     state.buffer = Module._tc_buffer();
     state.capacity = Module._tc_buffer_size();
     state.wasmReady = true;
+    state.wsIn = Module._tc_ws_start();
     if (state.config) startPlayer();
   }
 };
@@ -125,10 +133,37 @@ function ptsMs(data) {
   return new DataView(data).getFloat64(8, true) * 1000;
 }
 
+// The browser extension, streaming without the Mac app. The player's C++ holds its WebSocket, because a TV
+// web app can't accept one itself; this side treats it like the Mac's connection, through the same messages.
+function browserSocket() {
+  return {
+    readyState: 1, host: '', browser: true,
+    send: function (text) { Module.ccall('tc_ws_send', null, ['string'], [text]); },
+    close: function () { Module._tc_ws_close(); }
+  };
+}
+
+function collectBrowser() {
+  if (!state.wsIn) return;
+  // An ended connection first, so a browser that reconnects straight away is seen as new.
+  if (Module._tc_ws_closed() && state.browser) {
+    var was = state.browser;
+    state.browser = null;
+    if (state.socket === was) onClosed();
+  }
+  if (Module._tc_ws_opened()) state.browser = browserSocket();
+  var size;
+  while (state.browser && (size = Module._tc_ws_next()) > 0) {
+    var data = Module._tc_ws_text() ? Module.UTF8ToString(state.wsIn) : Module.HEAPU8.slice(state.wsIn, state.wsIn + size).buffer;
+    onMessage({ target: state.browser, data: data });
+  }
+}
+
 // The player shows a frame the moment it gets one, but Wi-Fi delivers in bursts and sometimes stalls.
 // Playing by timestamp keeps motion even, and the Smooth delay rides out those pauses.
 function pump(now) {
   requestAnimationFrame(pump);
+  collectBrowser();
   var config = state.config;
   if (!config) return;
   if (state.udp) collectUdp(now);
@@ -152,8 +187,8 @@ function pump(now) {
 }
 
 function onMessage(event) {
-  // One Mac at a time: whoever connected first keeps the TV until their cast ends. Anything from
-  // another connection is refused, so two Macs can never feed the player at once.
+  // One sender at a time, Mac or browser: whoever connected first keeps the TV until their cast ends.
+  // Anything from another connection is refused, so two can never feed the player at once.
   if (state.socket && event.target !== state.socket) {
     event.target.onclose = event.target.onmessage = null;
     event.target.close();
@@ -162,13 +197,14 @@ function onMessage(event) {
   if (typeof event.data !== 'string') return onPacket(event.data);
   var message = JSON.parse(event.data);
   if (message.type === 'throwcast') {
-    localStorage.setItem('mac', event.target.host);
+    // Only a Mac is worth looking for again after a reload; a browser connects to the TV by itself.
+    if (!event.target.browser) localStorage.setItem('mac', event.target.host);
     event.target.claimed = true;
     state.socket = event.target;
     say('Connecting to ' + (message.name || 'your Mac'));
     send(capabilities());
   } else if (message.type === 'config') {
-    if (state.config) return location.reload();
+    if (state.config) return reload();
     state.config = message;
     if (state.wasmReady) startPlayer();
   } else if (message.type === 'direct') {
@@ -177,7 +213,7 @@ function onMessage(event) {
     controlDirect(message);
   } else if (message.type === 'directStop') {
     stopDirect();
-    location.reload();
+    reload();
   } else if (message.type === 'test') {
     state.test = { bytes: 0, start: 0, last: 0 };
     say('Testing the connection', 'This takes a few seconds');
@@ -249,8 +285,8 @@ function reportDirect() {
 function onClosed() {
   if (state.direct) {
     stopDirect();
-    location.reload();
-  } else if (state.config) location.reload();
+    reload();
+  } else if (state.config) reload();
   else { state.socket = null; setTimeout(findMac, 1000); }
 }
 

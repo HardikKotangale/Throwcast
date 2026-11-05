@@ -100,7 +100,8 @@ public final class Engine {
             if let lastFailure { status["failure"] = lastFailure }
             if let tabVolume { status["tabVolume"] = tabVolume }
             if session != nil, let lastStats { status["stats"] = lastStats }
-            if let selected { status["tv"] = ["name": selected.name, "resolution": selected.resolutionLabel] }
+            // The address and size too, so the extension can cast to this TV by itself when the app isn't open.
+            if let selected { status["tv"] = ["name": selected.name, "resolution": selected.resolutionLabel, "host": selected.host, "width": selected.width, "height": selected.height] }
             if session != nil, let castWindowID, let bounds = Self.bounds(of: castWindowID) {
                 status["castWindow"] = ["x": Double(bounds.minX), "y": Double(bounds.minY), "width": Double(bounds.width), "height": Double(bounds.height)]
             }

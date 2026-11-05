@@ -99,11 +99,21 @@ Nothing else has been tested: other Samsung models, Brave, other Macs, or Ethern
 Throwcast has no account, no servers and no analytics. Everything stays between your Mac, your browser and your TV on your own network.
 
 - **The Mac app** sends the picture and sound only to the TV you chose, and only it may connect.
-- **The browser extension** runs on every site so it can find and fill the video on whichever tab you cast. It reads that page's video and its own settings, and talks only to the Throwcast app on your Mac. The cast tab's sound goes to the app over a connection that accepts only this Mac. **Play on TV**, offered when a page has a plain video file or stream link, passes that address and the request details the site needs, including cookies, from your browser to the app, which uses them only to fetch that one video for your TV.
+- **The browser extension** runs on every site so it can find and fill the video on whichever tab you cast. It reads that page's video and its own settings. A cast tab's picture and sound go straight from Chrome to your TV over your own network; to find the TV, it asks the addresses on your Wi-Fi network for a Samsung TV. With the Throwcast Mac app open, it also talks to the app on this Mac. **Play on TV**, offered when a page has a plain video file or stream link, passes that address and the request details the site needs, including cookies, from your browser to the app, which uses them only to fetch that one video for your TV.
 
 ## Responsible use
 
 Throwcast shows on your TV what is already playing on your Mac. It doesn't break or work around copy protection: video protected with DRM usually shows black, and that's expected. Respect the terms of the sites and services you cast from.
+
+## The extension on its own
+
+Without the Mac app, the extension casts a tab using Chrome itself: Chrome's tab capture, its WebCodecs encoder (which runs on the Mac's hardware H.264 encoder) and a WebSocket to the Throwcast TV app. On the AU8000 it measured 58–61 FPS at 4K, with no lost frames.
+
+What it can't do, because a browser can't:
+
+- **One tab only.** Your screen, One Window and Extra Screen need the Mac app.
+- **H.264, standard range.** HEVC, 10-bit and HDR need the Mac app.
+- **TCP only.** A Chrome extension can't send UDP, and this TV's browser couldn't carry WebRTC, so the Mac app keeps the UDP option.
 
 ## Limits
 

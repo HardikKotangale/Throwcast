@@ -23,7 +23,7 @@ No stick, no cable.
 
 </div>
 
-<img src="docs/assets/demo.webp" width="100%" alt="Choosing what to show; picking 4K from Full HD, 2K and 4K; choosing the delay, TCP or UDP, and the Mac's encoder; casting the open-source film Big Buck Bunny with play controls; and the frames the TV received at 3840 by 2160 and 59.5 FPS with no dropped frames">
+<img src="docs/assets/demo.webp" width="100%" alt="Choosing what to show; picking 4K from Full HD, 2K and 4K; choosing the delay, TCP or UDP, and the Mac's encoder; casting the open-source film Big Buck Bunny with play controls; casting a tab straight from the Chrome extension, with no Mac app; and the frames the TV received at 3840 by 2160 and 59.5 FPS with no dropped frames">
 
 > [!NOTE]
 > Only tested on a **Samsung AU8000 55"** (Tizen 6.5). Other Samsung TVs from 2020 on should work but haven't been tried, so [let us know](../../issues) how yours does.
@@ -34,9 +34,24 @@ No stick, no cable.
 - **Steady 60 FPS.** Measured on the TV, 59.5 FPS on average with 0 dropped frames ([details](docs/DETAILS.md#a-real-cast-measured)).
 - **Delay you choose.** Smooth (0.4 s) for films, Balanced (0.1 s) for everyday use, or Instant (0.03 s) for mouse and typing, over TCP or UDP ([details](docs/DETAILS.md#delay-and-network)).
 - **Any Apple silicon Mac.** Throwcast checks which hardware encoders your Mac has, HEVC or H.264, and offers only those.
-- **Any browser tab.** Just the video, filling the TV, on almost any site, live streams included.
+- **Any browser tab, even without the Mac app.** The extension casts a tab to the TV by itself, in up to 4K at 60 FPS: the whole page, or just the video in full screen, with live streams, picture styles and stream settings.
 - **Sound where it belongs.** A cast tab plays on the TV, keeps playing after the Mac sleeps, and your Mac keeps its own sound.
 - **Simple for everyone.** Good, Better or Best, five color styles, play controls on your Mac, and every control works from the keyboard and with VoiceOver.
+
+## The extension on its own
+
+Only want to cast browser tabs? Install the TV app and the extension; the Mac app is optional.
+
+- **Chrome does the work.** It captures the tab, encodes it on the Mac's hardware H.264 encoder and sends it straight to the TV over your Wi-Fi.
+- **The whole page, or just the video.** The site works as usual on the TV; full screen fills the TV with the video, and Escape goes back.
+- **Picture and Stream settings,** live during a cast: styles, sliders, quality, bitrate, frame rate, delay, and a Wi-Fi test.
+- **Nothing in the background.** It runs only while a tab is on the TV.
+
+The Mac app adds your whole screen, One Window, Extra Screen, HEVC, HDR and UDP ([what each can do](docs/DETAILS.md#the-extension-on-its-own)).
+
+<p align="center">
+  <img src="docs/assets/extension.webp" width="380" alt="The Throwcast extension: choosing a tab and pressing Show This Tab on TV, then Stop, play controls and the TV's frame rate during the cast, then the Picture styles and sliders, then the Stream settings">
+</p>
 
 ## Get started
 
@@ -44,7 +59,7 @@ No stick, no cable.
 2. **TV:** turn on Developer Mode and install the TV app from your Mac ([guide](docs/INSTALL.md#2-the-tv-app)).
 3. **Browser:** load the extension in Chrome or Brave ([guide](docs/INSTALL.md#3-the-browser-extension)).
 
-Then open Throwcast and press **Show on TV**.
+Then open Throwcast and press **Show on TV**. To cast just a browser tab, the extension also works on its own, without the Mac app.
 
 ## If it doesn't connect
 

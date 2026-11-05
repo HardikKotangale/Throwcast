@@ -55,7 +55,8 @@ Throwcast ${VERSION}
    minus button, then open Throwcast and allow it.
 2. Browser extension: open chrome://extensions (or brave://extensions), turn on
    Developer mode, choose Load unpacked, and pick a copy of the Browser Extension
-   folder from your Mac, not from this disk image.
+   folder from your Mac, not from this disk image. It casts a browser tab by itself,
+   even without the Mac app.
 3. TV app: Samsung only installs apps signed for your own TV, so it's built from
    the source once. Follow "2. The TV app" in docs/INSTALL.md on the project page:
    https://github.com/HardikKotangale/Throwcast/blob/main/docs/INSTALL.md

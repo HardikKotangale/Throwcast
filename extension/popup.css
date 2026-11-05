@@ -25,8 +25,9 @@ header img { border-radius: 5px; }
 header strong { font-weight: 600; font-size: 15px; }
 #tv { margin-left: auto; color: var(--secondary); font-size: 13px; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-section { animation: arrive 260ms var(--spring); }
-@keyframes arrive { from { opacity: 0; transform: translateY(4px) scale(0.985); } }
+/* The popup opens many times a day: a short fade, nothing that moves. */
+section { animation: arrive 120ms ease-out; }
+@keyframes arrive { from { opacity: 0; } }
 
 h1 {
   font-size: 17px;
@@ -77,7 +78,7 @@ input[type="range"] { width: 100%; margin-top: 14px; accent-color: var(--accent)
 .transport svg { display: block; margin: auto; fill: currentColor; }
 .skip { width: 44px; height: 44px; }
 .skip svg { width: 26px; height: 26px; }
-.round { width: 60px; height: 60px; background: var(--accent); color: #fff; border: 0; }
+.round { width: 56px; height: 56px; background: var(--accent); color: #fff; border: 0; }
 .round svg { width: 26px; height: 26px; }
 
 .live { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
@@ -103,3 +104,72 @@ input[type="range"] { width: 100%; margin-top: 14px; accent-color: var(--accent)
 @media (prefers-contrast: more) {
   :root { --line: var(--label); --secondary: var(--label); }
 }
+#address { width: 100%; margin-top: 14px; padding: 9px 11px; border: 1px solid var(--line, rgba(128,128,128,.4)); border-radius: 10px; background: transparent; color: inherit; font: inherit; font-size: 14px; }
+#address:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; border-bottom: 0.5px solid var(--line); font-size: 14px; }
+.link { color: var(--accent); font-weight: 500; }
+.segments.small { width: 190px; margin: 0; }
+.segments.small button { height: 28px; font-size: 12.5px; }
+.segments.two { grid-template-columns: repeat(2, 1fr); }
+.tvs { display: grid; gap: 6px; margin-top: 12px; }
+.tvs button { height: 44px; margin: 0; text-align: left; padding: 0 14px; border-radius: 11px; font-size: 14px; }
+.tvs button small { color: var(--secondary); margin-left: 6px; }
+.health { color: #30d158; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.hint { font-size: 12px; margin-top: 12px; }
+
+.styles { margin: 0 0 6px; }
+.slider { display: grid; grid-template-columns: 78px 1fr 40px; align-items: center; gap: 8px; min-height: 36px; font-size: 13px; }
+.slider span { color: var(--secondary); }
+.slider input { margin: 0; }
+.slider output { text-align: right; color: var(--secondary); font-variant-numeric: tabular-nums; font-size: 12px; }
+.note { font-size: 12px; margin: 8px 0 4px; }
+.styles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0 0 4px; }
+.styles button { height: 34px; margin: 0; border-radius: 9px; font-size: 13px; font-weight: 500; position: relative; }
+.styles button[aria-pressed="true"] { background: var(--accent); color: #fff; font-weight: 600; border-color: transparent; }
+.styles button:disabled { opacity: 0.45; cursor: not-allowed; }
+.styles .remove { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; margin: 0; padding: 0; border-radius: 9px; font-size: 11px; line-height: 16px; }
+.style-note { font-size: 12px; margin: 2px 0 6px; min-height: 1em; }
+.name-style { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; margin: 4px 0 6px; }
+.name-style input { padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; background: transparent; color: inherit; font: inherit; font-size: 13px; }
+.name-style button { height: 32px; margin: 0; padding: 0 12px; font-size: 13px; }
+.segments.four { grid-template-columns: repeat(4, 1fr); }
+.typed { display: flex; align-items: center; gap: 6px; color: var(--secondary); font-size: 13px; }
+.typed input { width: 72px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 13px; text-align: right; }
+.typed input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.small-button { height: 30px; margin: 0; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; }
+.test-result { font-size: 12.5px; margin: 6px 0 2px; }
+.link-button { display: inline; height: auto; margin: 0; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
+
+/* Stop sits at the top, beside what's casting, where it's found without scrolling past the settings. */
+.cast-head { display: flex; align-items: center; gap: 10px; }
+.cast-head .title { flex: 1; min-width: 0; }
+.stop.compact { flex: none; width: auto; height: 30px; margin: 0; padding: 0 12px; gap: 6px; border-radius: 15px; font-size: 13px; font-weight: 600; white-space: nowrap; align-self: center; }
+.stop.compact svg { width: 10px; height: 10px; }
+
+/* Redesign: one card for what's on the TV, settings one tap away. */
+#tv { display: none; }
+.card { padding: 14px; border-radius: 14px; background: var(--surface); border: 0.5px solid var(--line); }
+.card .cast-head .title { font-size: 16px; }
+.status { display: flex; align-items: center; gap: 7px; margin-top: 6px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--secondary); }
+.status.on { color: #30d158; }
+.status.on .dot { background: #30d158; box-shadow: 0 0 0 3px rgba(48, 209, 88, 0.18); }
+.card .controls #scrub { margin-top: 12px; }
+.card .transport { gap: 22px; margin-top: 6px; }
+.card .volume { margin-top: 10px; }
+.mode { margin-top: 12px; }
+.size { margin-top: 6px; }
+.tv-line { display: flex; align-items: center; gap: 8px; width: 100%; height: 40px; margin-top: 8px; padding: 0 12px; border-radius: 11px; font-weight: 500; font-size: 13px; text-align: left; }
+.tv-line #tvName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-line .dot { background: #30d158; }
+.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+.tabs button { height: 36px; margin: 0; font-size: 13px; font-weight: 600; }
+.tabs button[aria-expanded="true"] { background: var(--accent); color: #fff; border-color: transparent; }
+.panel { margin-top: 10px; padding: 12px; border-radius: 14px; background: var(--surface); border: 0.5px solid var(--line); }
+.panel .setting { min-height: 40px; border-bottom: 0.5px solid var(--line); }
+.panel .setting:last-of-type { border-bottom: 0; }
+.panel .styles { margin-top: 0; }
+.setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
+.setting > span:first-child { color: var(--secondary); }
+@media (prefers-reduced-motion: reduce) { section { animation: none; } }

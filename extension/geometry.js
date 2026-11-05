@@ -12,8 +12,3 @@ export function sameWindow(window, cast) {
   if (!window || !cast) return false;
   return Math.abs(window.left - cast.x) + Math.abs(window.top - cast.y) + Math.abs(window.width - cast.width) + Math.abs(window.height - cast.height) < 80;
 }
-
-/// The window height that makes the page exactly 16:9, once the browser's title bar is added.
-export function windowHeightFor(width, window, tab) {
-  return Math.round(width * 9 / 16) + (window.height - tab.height);
-}
