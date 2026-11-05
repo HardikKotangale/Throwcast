@@ -4,6 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH=~/tizen-studio/tools:$PATH
 HOST=${1:?tv ip}
+# A connection left over from an earlier install can refuse the transfer, so start a fresh one.
+sdb disconnect "$HOST" >/dev/null 2>&1 || true
 sdb connect "$HOST" | tail -1
 S="$HOST:26101"
 R="/home/owner/share/tmp/sdk_tools/Throwcast-$(date +%s).wgt"

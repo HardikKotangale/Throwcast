@@ -43,7 +43,7 @@ So: Smooth or Balanced over TCP for watching, Instant over UDP for working.
 
 ## A real cast, measured
 
-*Big Buck Bunny* is an open-source 60 FPS film, © Blender Foundation, licensed [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). Its 1080p copy from [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Big_Buck_Bunny_4K.webm) played in a Brave tab and was cast with **Show This Tab on TV** at **Best** (4K, 60 Mbps).
+*Big Buck Bunny* is an open-source 60 FPS film, © Blender Foundation, licensed [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). Its 1080p copy from [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Big_Buck_Bunny_4K.webm) played in a Brave tab and was cast through the Mac app at **Best** (4K, 60 Mbps). The extension on its own measured 58–61 FPS at 4K with no lost frames ([below](#the-extension-on-its-own)).
 
 | Measured over 20 seconds | Result |
 | --- | --- |
@@ -75,16 +75,16 @@ Early versions held 54 to 58 FPS with a stutter about once a second. Measuring a
 | --- | --- |
 | **TV** | Samsung AU8000 55" (UN55AU8000FXZA), Tizen 6.5, 4K at 60 Hz |
 | **Mac** | MacBook Pro with M4 Pro, macOS 26 |
-| **Browser** | Google Chrome |
+| **Browser** | Google Chrome, and Brave for the extension |
 | **Network** | Mac and TV on the same home Wi-Fi |
 
-Nothing else has been tested: other Samsung models, Brave, other Macs, or Ethernet.
+Nothing else has been tested: other Samsung models, other Macs, Windows, or Ethernet.
 
 ## Requirements
 
 - **Mac:** macOS 15 or later, on Apple silicon. Only tested on an M4 Pro.
 - **TV:** a Samsung TV from 2020 or later with Developer Mode. Only tested on the AU8000.
-- **Browser:** Chrome 123 or later, or Brave, for tab casting.
+- **Browser:** Chrome 123 or later, or Brave, for tab casting. For tab casting alone, that and the TV app are all you need; the Mac app is optional.
 - **Network:** the Mac and the TV on the same local network.
 
 ## Permissions
@@ -92,7 +92,7 @@ Nothing else has been tested: other Samsung models, Brave, other Macs, or Ethern
 - **Screen Recording** is how the Mac app sees what to send. Nothing is saved.
 - **Local Network** lets it find the TV and stream to it.
 - **Accessibility** (optional) lets **One Window** resize a browser window you pick to the TV's shape while it's shown, and put it back afterwards. Without it, the window is shown at its own shape, with bars.
-- **The extension** reads the page you cast so it can fill the TV and control the video, and captures only that tab's sound. Chrome shows that the tab is shared while it does.
+- **The extension** reads the page you cast so it can fill the TV and control the video, and captures only that tab's picture and sound. Chrome shows that the tab is shared while it does.
 
 ## Privacy
 
@@ -117,14 +117,14 @@ What it can't do, because a browser can't:
 
 ## Limits
 
-- **Unencrypted stream:** anyone who can capture traffic on your network could see it, so don't cast private content on a shared network. The Mac only streams to the TV you chose.
-- **One TV at a time, and one Mac per TV.** The Mac that connects first keeps the TV until its cast ends. Another Mac that tries meanwhile waits up to 25 seconds, then says the TV didn't connect, and the cast already playing isn't interrupted.
+- **Unencrypted stream:** anyone who can capture traffic on your network could see it, so don't cast private content on a shared network. The Mac app and the extension only stream to the TV you chose.
+- **One TV at a time, and one sender per TV.** Whoever connects first, a Mac app or a browser, keeps the TV until its cast ends. Another that tries meanwhile is refused, and the cast already playing isn't interrupted: a second Mac says the TV didn't connect after 25 seconds.
 - **Protected video:** DRM video from some services usually shows black.
 - **Mission Control:** the TV holds the last picture until it closes, while the sound keeps playing.
 - **Smooth delay:** Smooth runs about 0.4 seconds behind, so a pause on the Mac takes a moment to reach the TV. Pick **Balanced** or **Instant** under **Playback** for less.
 - **Instant over Wi-Fi:** a 0.03 s buffer leaves time for only one resend, so on busy Wi-Fi a few frames a minute may be skipped.
-- **Private macOS API:** **Fill the TV**, **Extra Screen** and tab casting use one, so a macOS update could break them. **Keep Shape** and **One Window** don't depend on it.
-- **Large networks:** finding devices assumes a home-sized network. On larger ones, type the TV's IP address.
+- **Private macOS API:** **Fill the TV** and **Extra Screen** use one, so a macOS update could break them. **Keep Shape**, **One Window** and the extension's tab casting don't depend on it.
+- **Large networks:** finding the TV assumes a home-sized network: the Mac app asks every address on its own network, and the extension looks in the networks home routers use most. On other networks, type the TV's IP address.
 
 ## Development
 
@@ -132,8 +132,9 @@ What it can't do, because a browser can't:
 swift test                 # engine tests: color round trip on the hardware encoder, UDP packet layout, H.264, crop
 (cd app && flutter test)   # app layouts at normal and large text, color profiles, keyboard use
 clang++ -std=c++17 tv/wasm/udp_frames_test.cpp -o /tmp/udp && /tmp/udp   # the TV's UDP frame rebuilder
+clang++ -std=c++17 tv/wasm/websocket_test.cpp -o /tmp/ws && /tmp/ws       # the TV's WebSocket server for the extension
 .build/debug/Throwcast --cast <tv-ip> --seconds 20 --source mirror --bitrate 40 \
   --playback balanced --transport udp --codec hevc   # no UI, prints stats every second
 ```
 
-`app/` is the Flutter window. `app/plugins/throwcast_engine` is the Swift engine, built into the app as a plugin: ScreenCaptureKit capture, the hardware encoder and the network stream all run inside the app, so macOS has one app to approve. `tv/` is the Samsung receiver, and `extension/` is the browser extension.
+`app/` is the Flutter window. `app/plugins/throwcast_engine` is the Swift engine, built into the app as a plugin: ScreenCaptureKit capture, the hardware encoder and the network stream all run inside the app, so macOS has one app to approve. `tv/` is the Samsung receiver: `tv/app` is the page, and `tv/wasm` its C++ (player, UDP frame rebuilder, WebSocket server). `extension/` is the browser extension: `stream.js` captures, encodes and sends a tab, `content.js` handles the page, and `popup.*` is its window.

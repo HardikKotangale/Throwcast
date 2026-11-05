@@ -28,7 +28,24 @@ You need [Tizen Studio](https://developer.samsung.com/smarttv/develop/getting-st
    scripts/install-tv.sh <tv-ip-address>
    ```
 
-Throwcast then appears in the TV's **Apps**. The Mac app opens it when you cast. The player is prebuilt in `tv/app`, so Docker is only needed if you change `tv/wasm/player.cpp`.
+Throwcast then appears in the TV's **Apps**. The Mac app or the browser extension opens it when you cast. The player is prebuilt in `tv/app`, so Docker is only needed if you change `tv/wasm/player.cpp`.
+
+This is needed once even if you'll only use the browser extension: Samsung installs only apps signed for your own TV, so the TV app can't come ready-made in the download.
+
+### Updating the TV app
+
+A new release can need a new TV app too; its release notes say so. 1.1.1 does, because the extension casts to a server inside the TV app. Get the new version of this project (download it again, or `git pull`), then run the same two commands:
+
+```sh
+scripts/package-tv.sh <your-profile-name>
+scripts/install-tv.sh <tv-ip-address>
+```
+
+The new version replaces the old one; Developer Mode and the signing profile stay as they are.
+
+- **"Fail install" or "problem to transfer package":** run `install-tv.sh` again; it starts a fresh connection to the TV.
+- **The TV doesn't connect at all:** check that Developer Mode is still on with this Mac's IP address. A new IP address from your router, or a TV reset, needs step 1 again.
+- **Certificate errors:** the Samsung certificate may have expired. Renew the profile in **Tools > Certificate Manager**, then package and install again.
 
 ## 3. The browser extension
 
