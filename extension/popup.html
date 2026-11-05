@@ -41,34 +41,88 @@
   <template id="tab">
     <section>
       <h1 class="title"></h1>
-      <p>Just the page, without the browser around it.</p>
       <button class="primary" id="cast">Show This Tab on TV</button>
+      <button class="tv-line" id="changeTv"><i class="dot" aria-hidden="true"></i><span id="tvName"></span><span class="link">Change</span></button>
       <button class="quiet" id="other" hidden></button>
       <p class="error" hidden></p>
+      <div class="settings-slot"></div>
+    </section>
+  </template>
+
+  <template id="settings">
+    <div class="tabs" role="group" aria-label="Settings">
+      <button data-tab="picture" aria-expanded="false" aria-controls="panel-picture">Picture</button>
+      <button data-tab="stream" aria-expanded="false" aria-controls="panel-stream">Stream</button>
+    </div>
+    <div class="panel" id="panel-picture" data-panel="picture" hidden>
+      <div class="styles" role="group" aria-label="Style">
+        <button data-style="natural">Natural</button>
+        <button data-style="video">Video</button>
+        <button data-style="cinema">Cinema</button>
+        <button data-style="vivid">Vivid</button>
+        <button data-style="hdr" disabled title="HDR needs a 10-bit HEVC stream of HDR content. A browser tab is standard range, so use the Throwcast Mac app for HDR.">HDR</button>
+        <button id="newStyle">+ New</button>
+      </div>
+      <p class="style-note"></p>
+      <form class="name-style" hidden><input id="styleName" type="text" maxlength="24" placeholder="Name this style" aria-label="Style name"><button type="submit">Save</button><button type="button" id="cancelStyle" class="quiet">Cancel</button></form>
+      <label class="slider"><span>Brightness</span><input type="range" data-look="brightness" min="-0.25" max="0.25" step="0.005" aria-label="Brightness"><output></output></label>
+      <label class="slider"><span>Contrast</span><input type="range" data-look="contrast" min="0.75" max="1.25" step="0.005" aria-label="Contrast"><output></output></label>
+      <label class="slider"><span>Color</span><input type="range" data-look="saturation" min="0" max="2" step="0.01" aria-label="Color"><output></output></label>
+      <label class="slider"><span>Warmth</span><input type="range" data-look="warmth" min="-1" max="1" step="0.01" aria-label="Warmth"><output></output></label>
+      <label class="slider"><span>Shadows</span><input type="range" data-look="shadows" min="0.8" max="1.2" step="0.004" aria-label="Shadows"><output></output></label>
+      <button class="quiet" id="resetLook">Reset Picture</button>
+    </div>
+    <div class="panel" id="panel-stream" data-panel="stream" hidden>
+      <div class="setting"><span>Quality</span><div class="segments small" data-setting="quality" role="group" aria-label="Quality"><button data-value="4k">4K</button><button data-value="1440">1440p</button><button data-value="1080">1080p</button></div></div>
+      <div class="setting"><span>Bitrate</span><div class="segments small four" data-setting="bitrate" role="group" aria-label="Bitrate in megabits per second"><button data-value="auto">Auto</button><button data-value="20">20</button><button data-value="40">40</button><button data-value="60">60</button></div></div>
+      <div class="setting"><span>Or type it</span><span class="typed"><input id="bitrate" type="number" inputmode="numeric" min="5" max="100" step="1" placeholder="Mbps" aria-label="Bitrate in megabits per second, 5 to 100"><span>Mbps</span></span></div>
+      <div class="setting test-row"><span>Wi-Fi to the TV</span><button class="small-button" id="testWifi">Test</button></div>
+      <p class="test-result" hidden></p>
+      <div class="setting"><span>Frame Rate</span><div class="segments small two" data-setting="fps" role="group" aria-label="Frame rate"><button data-value="60">60</button><button data-value="30">30</button></div></div>
+      <div class="setting"><span>Delay</span><div class="segments small two" data-setting="delay" role="group" aria-label="Delay"><button data-value="400">Smooth</button><button data-value="100">Low</button></div></div>
+      <p class="note">Higher bitrate is sharper but needs stronger Wi-Fi. Smooth rides out Wi-Fi hiccups; Low feels quicker. During a cast, a change takes a moment on the TV.</p>
+    </div>
+  </template>
+
+  <template id="tvs">
+    <section>
+      <h1>Choose your TV</h1>
+      <p class="detail">Looking on your Wi-Fi…</p>
+      <div class="tvs"></div>
+      <input id="address" type="text" inputmode="decimal" placeholder="Or type its address, like 192.168.1.20" aria-label="TV address">
+      <button class="quiet" id="add">Use This Address</button>
+      <p class="error" hidden></p>
+      <p class="hint">The TV needs the Throwcast TV app. Its address is in the TV’s Settings, under Network.</p>
     </section>
   </template>
 
   <template id="casting">
     <section>
-      <h1 class="title"></h1>
-      <p>On your TV. Your Mac is free for anything else.</p>
-      <div class="controls" hidden>
-        <div class="live" hidden><span class="note">Watching live</span><button id="goLive" class="pill"><i></i><span>LIVE</span></button></div>
-        <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Position">
-        <div class="times"><span id="now">0:00</span><span id="total">0:00</span></div>
-        <div class="transport">
-          <button id="back" class="skip" aria-label="Back 10 seconds"><svg aria-hidden="true"><use href="#icon-back"></use></svg></button>
-          <button id="toggle" class="round" aria-label="Pause"><svg aria-hidden="true"><use href="#icon-pause"></use></svg></button>
-          <button id="forward" class="skip" aria-label="Forward 10 seconds"><svg aria-hidden="true"><use href="#icon-forward"></use></svg></button>
+      <div class="card">
+        <div class="cast-head">
+          <h1 class="title"></h1>
+          <button id="stopCast" class="stop compact" aria-label="Stop casting" title="Stop casting"><svg aria-hidden="true"><use href="#icon-stop"></use></svg>Stop</button>
         </div>
-        <label class="volume"><svg aria-hidden="true"><use href="#icon-speaker-low"></use></svg><input id="volume" type="range" min="0" max="100" value="100" aria-label="Volume"><svg aria-hidden="true"><use href="#icon-speaker"></use></svg></label>
+        <p class="status"><i class="dot" aria-hidden="true"></i><span class="health">Starting on your TV…</span></p>
+        <div class="controls" hidden>
+          <div class="live" hidden><span class="note">Watching live</span><button id="goLive" class="pill"><i></i><span>LIVE</span></button></div>
+          <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Position">
+          <div class="times"><span id="now">0:00</span><span id="total">0:00</span></div>
+          <div class="transport">
+            <button id="back" class="skip" aria-label="Back 10 seconds"><svg aria-hidden="true"><use href="#icon-back"></use></svg></button>
+            <button id="toggle" class="round" aria-label="Pause"><svg aria-hidden="true"><use href="#icon-pause"></use></svg></button>
+            <button id="forward" class="skip" aria-label="Forward 10 seconds"><svg aria-hidden="true"><use href="#icon-forward"></use></svg></button>
+          </div>
+          <label class="volume"><svg aria-hidden="true"><use href="#icon-speaker-low"></use></svg><input id="volume" type="range" min="0" max="100" value="100" aria-label="Volume on the TV"><svg aria-hidden="true"><use href="#icon-speaker"></use></svg></label>
+        </div>
       </div>
-      <div class="segments" role="group" aria-label="Picture size">
+      <div class="segments two mode" role="group" aria-label="On the TV" hidden><button data-mode="page">Whole Page</button><button data-mode="video">Just the Video</button></div>
+      <div class="segments size" role="group" aria-label="Picture size">
         <button data-size="contain">Show All</button>
         <button data-size="cover">Fill</button>
         <button data-size="fill">Stretch</button>
       </div>
-      <button id="stopCast" class="stop"><svg aria-hidden="true"><use href="#icon-stop"></use></svg>Stop Casting</button>
+      <div class="settings-slot"></div>
     </section>
   </template>
 

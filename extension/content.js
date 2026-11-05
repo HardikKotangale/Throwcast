@@ -4,7 +4,31 @@ let size;
 // One Window is showing this tab's browser window: the page shows as it is until the user asks for
 // full screen, which fills the TV with the video instead.
 let watching = false;
+// 'tab': this tab is cast by the extension. 'window': the Mac app casts its window with One Window. Either
+// way the page works normally until full screen fills the TV with the video.
+let castKind = null;
+let checking;
+
+// After the extension is reloaded or updated, pages that were already open keep this old script, but its
+// link to the extension is gone: any call then throws at once instead of failing quietly. So every call
+// goes through here, and a script that has lost the extension stops its timers and does nothing more.
+// Refreshing the page loads the new script.
+function toExtension(message) {
+  if (!chrome.runtime?.id) {
+    clearInterval(reporting);
+    clearInterval(checking);
+    reporting = checking = undefined;
+    return Promise.resolve(null);
+  }
+  try {
+    return chrome.runtime.sendMessage(message).catch(() => null);
+  } catch {
+    return Promise.resolve(null);
+  }
+}
 let preferredSize = 'cover';
+// The cast's picture adjustments, applied to what the tab shows, so the TV gets them as it's captured.
+let look = null;
 let volumeSlider;
 
 // Live streams report a length that's endless, absurd (Twitch says about 34 years), marked live by the
@@ -126,9 +150,10 @@ let guard;
 function report() {
   // A next episode can swap the video without reloading the page, and a player can drop the fit.
   applyFit();
+  applyLookToPage();
   const video = mainVideo();
   if (!video) return;
-  chrome.runtime.sendMessage({ type: 'tabState', ...state(video), filled: Boolean(size) }).catch(() => {});
+  toExtension({ type: 'tabState', ...state(video), filled: Boolean(size) });
 }
 
 // Whichever is bigger: a video in this frame, or a frame that may hold one. Frames inside frames
@@ -140,8 +165,78 @@ function fitTarget() {
   return frame && area(frame) > 0 ? frame : video;
 }
 
+// Brightness, contrast, colour, warmth and shadows, as one SVG filter: the same order and ranges the
+// Mac app uses. It works in sRGB, like the app, not the browser's default linear light.
+const SVG = 'http://www.w3.org/2000/svg';
+const LOOK = 'throwcast-look';
+const neutral = (l) => !l || (l.brightness === 0 && l.contrast === 1 && l.saturation === 1 && l.warmth === 0 && l.gamma === 1);
+
+function lookFilter(element) {
+  if (neutral(look)) return 'none';
+  // A filter is looked up where the element lives, which may be inside a player's shadow root.
+  const root = element.getRootNode?.() ?? document;
+  let svg = root.getElementById?.(LOOK);
+  if (!svg) {
+    svg = document.createElementNS(SVG, 'svg');
+    svg.id = LOOK;
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('style', 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none');
+    const filter = document.createElementNS(SVG, 'filter');
+    filter.id = `${LOOK}-f`;
+    filter.setAttribute('color-interpolation-filters', 'sRGB');
+    for (const name of ['saturate', 'warmth']) {
+      const matrix = document.createElementNS(SVG, 'feColorMatrix');
+      matrix.dataset.part = name;
+      filter.append(matrix);
+    }
+    for (const name of ['levels', 'shadows']) {
+      const transfer = document.createElementNS(SVG, 'feComponentTransfer');
+      transfer.dataset.part = name;
+      for (const channel of ['feFuncR', 'feFuncG', 'feFuncB']) transfer.append(document.createElementNS(SVG, channel));
+      filter.append(transfer);
+    }
+    svg.append(filter);
+    (root === document ? document.documentElement : root).append(svg);
+  }
+  const part = (name) => svg.querySelector(`[data-part="${name}"]`);
+  part('saturate').setAttribute('type', 'saturate');
+  part('saturate').setAttribute('values', String(look.saturation));
+  // Warmer leans toward orange: a little more red, a little less blue.
+  const w = look.warmth * 0.1;
+  part('warmth').setAttribute('type', 'matrix');
+  part('warmth').setAttribute('values', `${1 + w} 0 0 0 0  0 ${1 + w * 0.3} 0 0 0  0 0 ${1 - w} 0 0  0 0 0 1 0`);
+  for (const f of part('levels').children) {
+    f.setAttribute('type', 'linear');
+    f.setAttribute('slope', String(look.contrast));
+    f.setAttribute('intercept', String(0.5 * (1 - look.contrast) + look.brightness));
+  }
+  for (const f of part('shadows').children) {
+    f.setAttribute('type', 'gamma');
+    f.setAttribute('amplitude', '1');
+    f.setAttribute('exponent', String(look.gamma));
+    f.setAttribute('offset', '0');
+  }
+  return `url(#${LOOK}-f)`;
+}
+
+// With no video to fill, the adjustments go on the whole page.
+function applyLookToPage() {
+  const page = document.documentElement;
+  if (!page) return;
+  const casting = castKind === 'tab' || (size && !watching);
+  if (casting && !fitted && !neutral(look)) page.style.setProperty('filter', lookFilter(page), 'important');
+  else page.style.removeProperty('filter');
+}
+
+function setLook(next) {
+  look = next;
+  if (fitted) applyFit();
+  applyLookToPage();
+}
+
 function fitStyle(element) {
   return {
+    filter: castKind === 'window' ? 'none' : lookFilter(element),
     position: 'fixed', inset: '0', width: '100vw', height: '100vh', 'max-width': 'none', 'max-height': 'none',
     margin: '0', padding: '0', border: '0', transform: 'none', 'z-index': '2147483647', background: '#000',
     display: 'block', visibility: 'visible', opacity: '1', 'object-fit': size,
@@ -204,11 +299,18 @@ function unfit() {
   clearInterval(reporting);
   reporting = undefined;
   size = undefined;
+  watching = false;
+  castKind = null;
+  look = null;
   document.documentElement.removeAttribute('data-throwcast-casting');
   release();
+  applyLookToPage();
+  document.querySelectorAll(`#${LOOK}`).forEach((svg) => svg.remove());
 }
 
-function watch() {
+function watch(kind = 'window') {
+  castKind = kind;
+  applyLookToPage();
   if (watching || size) return;
   watching = true;
   // Lets fullscreen.js catch full-screen requests, which would otherwise move the window to its own desktop.
@@ -218,7 +320,6 @@ function watch() {
 
 function unwatch() {
   if (!watching) return;
-  watching = false;
   unfit();
 }
 
@@ -231,7 +332,7 @@ function setFill(on) {
 }
 
 // Every frame of the tab fills or lets go together, because the video can sit inside a frame.
-const askFill = (on) => chrome.runtime.sendMessage({ type: 'fill', on }).catch(() => {});
+const askFill = (on) => toExtension({ type: 'fill', on });
 
 // F, a double-click or the player's button. A cast tab is already full, so it stays that way; in a
 // window cast it switches the video between filling the TV and the page as it was.
@@ -283,6 +384,8 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     }
   }
   if (message?.fill !== undefined) setFill(message.fill);
+  if (message?.look !== undefined) setLook(message.look);
+  if (message?.watch) watch(message.watch);
   if (message === 'unfit') unfit();
   const video = mainVideo();
   if (!video) return false;
@@ -300,22 +403,22 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
 
   if (message === 'describe') {
     const src = video.currentSrc || video.src || '';
-    respond({ ...state(video), src: /^https?:/.test(src) ? src : '', protected: Boolean(video.mediaKeys) });
+    respond({ ...state(video), filled: Boolean(size), src: /^https?:/.test(src) ? src : '', protected: Boolean(video.mediaKeys) });
   }
   return false;
 });
 
 function castCheck() {
-  chrome.runtime.sendMessage({ type: 'castCheck' }).then((mode) => {
-    if (mode === 'window') watch();
+  toExtension({ type: 'castCheck' }).then((mode) => {
+    if (mode === 'window' || mode === 'tab') watch(mode);
     else if (mode) fit(mode);
     else unwatch();
-  }).catch(() => {});
+  });
 }
 
 // A refreshed page or the next episode picks the cast back up.
 castCheck();
 // A window cast can start or end at any time, so a tab on screen with a video keeps asking, every 2 s.
-setInterval(() => {
+checking = setInterval(() => {
   if (document.visibilityState === 'visible' && (watching || deepAll('video').length)) castCheck();
 }, 2000);

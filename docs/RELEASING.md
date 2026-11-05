@@ -21,10 +21,10 @@ SIGN_ID="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=throwcast 
 
 ## Publish
 
-1. Bump `version:` in `app/pubspec.yaml`.
+1. Bump `version:` in `app/pubspec.yaml` and `"version"` in `extension/manifest.json`, to the same number.
 2. Build the DMG and open it once to check the window and the app's version.
 3. Note its checksum for the release notes: `shasum -a 256 dist/Throwcast.dmg`.
 4. Create a GitHub release and attach `dist/Throwcast.dmg` under that exact name, so the README's download button keeps working.
-5. Say in the notes whether this build is notarized.
+5. Say in the notes whether this build is notarized, and whether the TV app must be updated: it must whenever anything in `tv/` changed. Link to [Updating the TV app](INSTALL.md#updating-the-tv-app).
 
 Never attach `tv/dist/Throwcast.wgt`. It's signed with your own Samsung certificate and won't install on anyone else's TV.
