@@ -13,6 +13,21 @@ public final class Engine {
     private var connectionTest: ConnectionTest?
     private var direct: DirectPlayback?
     private let control = LocalControl()
+    private let remote = RemoteControl()
+    /// What a browser plays during a cast, read by the app itself when the extension isn't reporting.
+    private let pageReader = BrowserPlayback()
+    private var browserReportAt = Date.distantPast
+    /// The extension is reporting, so it has the controls; otherwise the app drives the browser itself.
+    private var extensionReporting: Bool { Date().timeIntervalSince(lastTabCheckIn) < 3 }
+    /// What the iPhone remote needs to catch up when it connects.
+    private var knownTVs: [String: [String: Any]] = [:]
+    private var castState: [String: Any] = ["event": "state", "state": "stopped"]
+    private var lastTabState: [String: Any]?
+    /// The app's last Start, so a Start from the phone uses the same quality, codec and TV.
+    private var lastStart: [String: Any]?
+    /// The window's settings, as it last shared them, for the iPhone remote.
+    private var appSettings: [String: Any]?
+    private static let remoteSettings: Set<String> = ["quality", "height", "bitrate", "fps", "playback", "udp", "codec", "tenBit", "profile", "volume", "look"]
     private let tabAudio = TabAudioServer()
     private var selected: TV?
     private var lastFailure: String?
@@ -40,6 +55,16 @@ public final class Engine {
     private func emit(_ object: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: object) else { return }
         emitLine?(String(decoding: data, as: UTF8.self))
+        remote.broadcast(object)
+        if let name = object["event"] as? String {
+            DispatchQueue.main.async { [weak self] in
+                switch name {
+                case "state": self?.castState = object
+                case "tabState": self?.lastTabState = object
+                default: break
+                }
+            }
+        }
     }
 
     private func handle(_ message: [String: Any]) {
@@ -64,7 +89,9 @@ public final class Engine {
         case "stopDirect":
             stopDirect()
         case "tabControl":
-            if message["volume"] != nil { setTabVolume(Self.volume(message)) } else { tabCommands.append(message) }
+            if !extensionReporting, Date().timeIntervalSince(browserReportAt) < 3 {
+                pageReader.control(message)   // no extension here: the app drives the browser itself
+            } else if message["volume"] != nil { setTabVolume(Self.volume(message)) } else { tabCommands.append(message) }
         case "volume":
             session?.setVolume(Self.volume(message))
         case "endTab":
@@ -78,16 +105,119 @@ public final class Engine {
         case "screen":
             sendScreen()
         case "start":
+            lastStart = message
             start(message)
+        case "appSettings":
+            var settings = message
+            settings["cmd"] = nil
+            appSettings = settings
+            emit(["event": "macSettings"].merging(settings) { a, _ in a })
+        case "forgetPhones":
+            remote.forget(nil)
+        case "forgetPhone":
+            if let id = message["id"] as? String { remote.forget(id) }
+        case "phones":
+            sendPhones()
         case "stop":
             session?.stop()
         default: break
         }
     }
 
+    /// A command from a paired iPhone. Only what RemoteControl.allowed lets through gets here.
+    private func handleRemote(_ message: [String: Any]) {
+        switch message["cmd"] as? String {
+        case "start":
+            // The app's own settings, with the phone choosing what to show and, optionally, the TV.
+            var request = lastStart ?? [:]
+            if let host = message["host"] as? String ?? selected?.host ?? request["host"] as? String {
+                request["host"] = host
+                if let tv = knownTVs[host] { request["width"] = tv["width"]; request["height"] = tv["height"] }
+            }
+            guard request["host"] != nil else { return emit(["event": "remoteStatus", "message": "Choose a TV in Throwcast on the Mac first."]) }
+            request["source"] = message["source"] as? String ?? "screen"
+            request["window"] = message["window"]
+            request["crop"] = nil
+            start(request)
+        case "appSetting":
+            // A setting from the phone goes to the window, which applies it as if it were clicked there.
+            guard let name = message["name"] as? String, Self.remoteSettings.contains(name) else { return }
+            emit(["event": "remoteSetting", "name": name, "value": message["value"] ?? NSNull()])
+        case "adjust":
+            // The picture, live, in the app's own ranges; kept for the next Start too.
+            let ranges: [(String, ClosedRange<Double>, Double)] = [("brightness", -0.25 ... 0.25, 0), ("contrast", 0.75 ... 1.25, 1),
+                                                                   ("saturation", 0 ... 2, 1), ("warmth", -1 ... 1, 0), ("gamma", 0.8 ... 1.2, 1)]
+            var look: [String: Any] = [:]
+            for (key, range, neutral) in ranges { look[key] = min(range.upperBound, max(range.lowerBound, message[key] as? Double ?? neutral)) }
+            lastStart = (lastStart ?? [:]).merging(look) { _, new in new }
+            session?.setAdjustments(Self.adjustments(look))
+            emit(["event": "look"].merging(look) { a, _ in a })
+        case "control":
+            guard let action = message["action"] as? String else { return }
+            if action == "stop" {
+                stopDirect()
+                endTab()
+            } else if ["play", "pause", "seek", "jump"].contains(action) {
+                direct?.control(action, seconds: message["seconds"] as? Double)
+            }
+        default:
+            handle(message)
+        }
+    }
+
+    /// Paired iPhones, for the Mac app's list.
+    private func sendPhones() {
+        remote.phones { [weak self] list in self?.emit(["event": "remotePhones", "phones": list]) }
+    }
+
+    /// A browser's playback, read by the app, shown the same way as the extension's report.
+    private func browserState(_ state: [String: Any]) {
+        guard session != nil, !extensionReporting else { return }
+        browserReportAt = Date()
+        emit(["event": "tabState", "title": state["title"] as? String ?? "Video", "time": state["time"] as? Double ?? 0,
+              "duration": state["duration"] as? Double ?? 0, "paused": state["paused"] as? Bool ?? false, "size": "cover",
+              "volume": state["volume"] as? Double ?? 1, "live": state["live"] as? Bool ?? false,
+              "behind": state["behind"] as? Double ?? 0, "start": state["start"] as? Double ?? -1])
+    }
+
+    private func remoteSnapshot() -> [[String: Any]] {
+        var events = Array(knownTVs.values)
+        let keys = ["brightness", "contrast", "saturation", "warmth", "gamma"]
+        if let lastStart { events.append(["event": "look"].merging(lastStart.filter { keys.contains($0.key) }) { a, _ in a }) }
+        if let appSettings { events.append(["event": "macSettings"].merging(appSettings) { a, _ in a }) }
+        events.append(castState)
+        if let selected { events.append(["event": "remoteStatus", "selectedTV": selected.host]) }
+        if let lastTabState, extensionReporting || Date().timeIntervalSince(browserReportAt) < 3 { events.append(lastTabState) }
+        if let lastStats, session != nil { events.append(["event": "stats"].merging(lastStats) { a, _ in a }) }
+        if let direct {
+            let now = direct.status
+            events.append(["event": "direct", "title": direct.title, "state": now.state, "time": now.time, "duration": now.duration])
+        }
+        return events
+    }
+
+    /// The Mac decides who may drive the TV. The phone shows the same code, so you can tell it's yours.
+    private static func askToPair(name: String, code: String, _ done: @escaping (Bool) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = "Let \(name) control Throwcast?"
+        alert.informativeText = "Allow only if your iPhone shows the code \(code)."
+        alert.addButton(withTitle: "Allow")
+        alert.addButton(withTitle: "Don't Allow")
+        NSApp.activate(ignoringOtherApps: true)
+        done(alert.runModal() == .alertFirstButtonReturn)
+    }
+
     private func startControl() {
         control.handler = { [weak self] request, respond in self?.answer(request, respond) }
         try? control.start()
+        remote.onCommand = { [weak self] message in self?.handleRemote(message) }
+        pageReader.onState = { [weak self] state in DispatchQueue.main.async { self?.browserState(state) } }
+        pageReader.onProblem = { [weak self] problem in self?.emit(["event": "remoteStatus", "message": problem]) }
+        remote.snapshot = { [weak self] in self?.remoteSnapshot() ?? [] }
+        remote.approve = { name, code, done in Self.askToPair(name: name, code: code, done) }
+        remote.onPhonesChanged = { [weak self] in self?.sendPhones() }
+        sendPhones()
+        try? remote.start()
         tabAudio.onAudio = { [weak self] pcm in self?.session?.sendTabAudio(pcm) }
         try? tabAudio.start()
     }
@@ -102,8 +232,12 @@ public final class Engine {
             if session != nil, let lastStats { status["stats"] = lastStats }
             // The address and size too, so the extension can cast to this TV by itself when the app isn't open.
             if let selected { status["tv"] = ["name": selected.name, "resolution": selected.resolutionLabel, "host": selected.host, "width": selected.width, "height": selected.height] }
+            // The whole screen on the TV (Fill the TV, Keep Shape, Extra Screen): whatever plays in the browser is on it.
+            if session != nil, castWindowID == nil, tabDisplay == nil { status["castScreen"] = true }
             if session != nil, let castWindowID, let bounds = Self.bounds(of: castWindowID) {
-                status["castWindow"] = ["x": Double(bounds.minX), "y": Double(bounds.minY), "width": Double(bounds.width), "height": Double(bounds.height)]
+                // The title too: Fill and Keep Shape reshape the window, but a browser's title stays its tab's.
+                status["castWindow"] = ["x": Double(bounds.minX), "y": Double(bounds.minY), "width": Double(bounds.width), "height": Double(bounds.height),
+                                        "title": Self.title(of: castWindowID) ?? ""]
             }
             if let direct {
                 let now = direct.status
@@ -332,6 +466,7 @@ public final class Engine {
     }
 
     private func send(_ tv: TV) {
+        knownTVs[tv.host] = ["event": "tv", "id": tv.id, "name": tv.name, "model": tv.model, "host": tv.host, "width": tv.width, "height": tv.height]
         emit(["event": "tv", "id": tv.id, "name": tv.name, "model": tv.model, "host": tv.host, "width": tv.width, "height": tv.height])
     }
 
@@ -366,6 +501,10 @@ public final class Engine {
     }
 
     /// Where a window is now, in the same points the browser reports its windows in.
+    private static func title(of id: CGWindowID) -> String? {
+        (CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]])?.first?[kCGWindowName as String] as? String
+    }
+
     private static func bounds(of id: CGWindowID) -> CGRect? {
         guard let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]])?.first,
               let bounds = info[kCGWindowBounds as String] as? NSDictionary else { return nil }
@@ -522,11 +661,15 @@ public final class Engine {
                 case .connecting: self.emit(["event": "state", "state": "connecting"])
                 case .casting:
                     self.emit(["event": "state", "state": "casting"])
+                    // A tab the extension casts reports itself; anything else on screen may be a browser playing.
+                    if self.tabDisplay == nil { self.pageReader.start() }
                 case .stopped:
+                    self.pageReader.stop()
                     self.session = nil
                     self.restoreWindow()
                     self.emit(["event": "state", "state": "stopped"])
                 case let .failed(reason):
+                    self.pageReader.stop()
                     self.session = nil
                     self.restoreWindow()
                     self.emit(["event": "state", "state": "failed", "message": reason])

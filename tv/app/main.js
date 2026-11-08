@@ -54,6 +54,7 @@ var Module = {
     state.capacity = Module._tc_buffer_size();
     state.wasmReady = true;
     state.wsIn = Module._tc_ws_start();
+    state.phoneIn = Module._tc_remote_start();
     if (state.config) startPlayer();
   }
 };
@@ -164,6 +165,7 @@ function collectBrowser() {
 function pump(now) {
   requestAnimationFrame(pump);
   collectBrowser();
+  collectPhones();
   var config = state.config;
   if (!config) return;
   if (state.udp) collectUdp(now);
@@ -223,6 +225,10 @@ function onMessage(event) {
     say('Looking for your Mac', 'Choose this TV in Throwcast on your Mac');
   } else if (message.type === 'ping') {
     send({ type: 'pong', t: message.t });
+  } else if (message.type === 'tabState' && event.target.browser) {
+    // What the extension's cast tab is playing, for the iPhone remote.
+    state.tab = message;
+    toPhones(tabEvent());
   }
 }
 
@@ -395,6 +401,7 @@ function report() {
   var line = { type: 'stats', lost: state.lost, fps: state.frames / seconds,
     udp: state.udp ? { state: Module._tc_udp_state(), in: Module._tc_udp_in(), refused: Module._tc_udp_refused(), frames: Module._tc_udp_frames(), asked: Module._tc_udp_asked() } : undefined, mbps: state.bytes * 8 / 1e6 / seconds, errors: state.errors, maxGapMs: state.maxGap };
   state.frames = state.bytes = state.errors = state.maxGap = state.lost = 0;
+  remoteReport(line);
   if (state.playerReady) {
     send(line);
     if (!dom.hud.hidden && state.config) {
@@ -404,12 +411,199 @@ function report() {
   }
 }
 
+// The iPhone remote, for casts from the browser extension alone (with the Mac app, the phone talks to the
+// Mac). The player's C++ holds the phones' WebSockets; pairing, the allow-list and everything else are here.
+// A phone pairs by typing the code this TV shows, so whoever pairs can see the screen. After that it has a
+// token. It can play, pause, seek, change the volume and stop: never send a link to play.
+var PHONE_COMMANDS = { hello: 1, tabControl: 1, volume: 1, endTab: 1, stop: 1, look: 1, size: 1, stream: 1 };
+var phones = {};          // id -> { trusted, name }
+var pairing = null;       // { code, until, tries }
+var pairLockedUntil = 0;
+var tvInfo = { name: 'TV', width: 3840, height: 2160, host: '' };
+var lastCastState = '';
+
+function fetchTvInfo() {
+  try { tvInfo.host = webapis.network.getIp(); } catch (e) {}
+  var request = new XMLHttpRequest();
+  request.onload = function () {
+    try {
+      var device = JSON.parse(request.responseText).device;
+      tvInfo.name = device.name || tvInfo.name;
+      var size = /(\d+)x(\d+)/.exec(device.resolution || '');
+      if (size) { tvInfo.width = +size[1]; tvInfo.height = +size[2]; }
+    } catch (e) {}
+  };
+  request.timeout = 2000;
+  request.open('GET', 'http://127.0.0.1:8001/api/v2/');
+  try { request.send(); } catch (e) {}
+}
+
+function pairedPhones() {
+  try { return JSON.parse(localStorage.getItem('phones') || '{}'); } catch (e) { return {}; }
+}
+
+function forgetPhones() {
+  localStorage.removeItem('phones');
+  for (var id in phones) Module._tc_remote_drop(+id);
+  say('Phones forgotten', 'Pair your iPhone again from Throwcast Remote');
+}
+
+function newToken() {
+  var bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  var out = '';
+  for (var i = 0; i < bytes.length; i++) out += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+  return out;
+}
+
+function toPhone(id, event) {
+  Module.ccall('tc_remote_send', null, ['number', 'string'], [id, JSON.stringify(event)]);
+}
+
+function toPhones(event) {
+  for (var id in phones) if (phones[id].trusted) toPhone(+id, event);
+}
+
+function macCasting() { return !!(state.socket && !state.socket.browser); }
+
+function castState() {
+  if (macCasting()) return 'stopped';
+  if (state.socket && state.socket.browser && state.config) return state.playerReady ? 'casting' : 'connecting';
+  return 'stopped';
+}
+
+function tabEvent() {
+  var t = state.tab;
+  return { event: 'tabState', title: t.title || 'This tab', time: t.time || 0, duration: t.duration || 0,
+    paused: !!t.paused, live: !!t.live, behind: t.behind || 0, volume: t.volume, settings: t.settings || null };
+}
+
+function showPairing(name) {
+  var now = Date.now();
+  if (!pairing || now > pairing.until) {
+    var code = '';
+    var bytes = new Uint8Array(6);
+    crypto.getRandomValues(bytes);
+    for (var i = 0; i < 6; i++) code += String(bytes[i] % 10);
+    pairing = { code: code, until: now + 60000, tries: 3 };
+  }
+  document.getElementById('pair-title').textContent = 'Allow ' + name + ' to control Throwcast';
+  document.getElementById('pair-code').textContent = pairing.code.slice(0, 3) + ' ' + pairing.code.slice(3);
+  document.getElementById('pair').hidden = false;
+  clearTimeout(pairing.timer);
+  pairing.timer = setTimeout(hidePairing, pairing.until - now);
+}
+
+function hidePairing() {
+  document.getElementById('pair').hidden = true;
+  if (pairing) clearTimeout(pairing.timer);
+  pairing = null;
+}
+
+function admit(id) {
+  phones[id].trusted = true;
+  toPhone(id, { event: 'welcome', mac: tvInfo.name, kind: 'tv' });
+  toPhone(id, { event: 'tv', host: tvInfo.host, name: tvInfo.name, width: tvInfo.width, height: tvInfo.height });
+  toPhone(id, { event: 'state', state: castState() });
+  if (macCasting()) toPhone(id, { event: 'remoteStatus', message: 'Your Mac is casting. Control it from the Mac.' });
+  if (state.tab && castState() !== 'stopped') toPhone(id, tabEvent());
+}
+
+function onPhone(id, text) {
+  var phone = phones[id];
+  var message;
+  try { message = JSON.parse(text); } catch (e) { return; }
+  if (!phone || !message || !PHONE_COMMANDS[message.cmd]) return;
+  if (message.cmd === 'hello') return phoneHello(id, message);
+  if (!phone.trusted) return toPhone(id, { event: 'needsPairing', enterCode: true });
+  // One control point per cast: a Mac's cast is the Mac's.
+  if (macCasting()) return toPhone(id, { event: 'remoteStatus', message: 'Your Mac is casting. Control it from the Mac.' });
+  if (!(state.socket && state.socket.browser)) return;
+  if (message.cmd === 'endTab' || message.cmd === 'stop') {
+    // The extension ends its cast when its socket closes, so this works with any version of it.
+    state.socket.close();
+  } else if (message.cmd === 'volume' || (message.cmd === 'tabControl' && typeof message.volume === 'number')) {
+    send({ type: 'remote', cmd: 'tabControl', volume: Math.max(0, Math.min(1, +message.volume || 0)) });
+  } else if (message.cmd === 'look' && message.look && typeof message.look === 'object') {
+    var look = {}, keys = ['brightness', 'contrast', 'saturation', 'warmth', 'gamma'];
+    for (var i = 0; i < keys.length; i++) look[keys[i]] = +message.look[keys[i]];
+    send({ type: 'remote', cmd: 'look', look: look });
+  } else if (message.cmd === 'size' && /^(contain|cover|fill)$/.test(message.size)) {
+    send({ type: 'remote', cmd: 'size', size: message.size });
+  } else if (message.cmd === 'stream' && message.changes && typeof message.changes === 'object') {
+    var c = message.changes, changes = {};
+    if (c.quality !== undefined) changes.quality = String(c.quality);
+    if (c.bitrate !== undefined) changes.bitrate = c.bitrate === 'auto' ? 'auto' : +c.bitrate;
+    if (c.fps !== undefined) changes.fps = +c.fps;
+    if (c.delay !== undefined) changes.delay = +c.delay;
+    send({ type: 'remote', cmd: 'stream', changes: changes });
+  } else if (message.cmd === 'tabControl' && /^(play|pause|seek|jump|live|next|previous)$/.test(message.action)) {
+    var command = { type: 'remote', cmd: 'tabControl', action: message.action };
+    if (typeof message.seconds === 'number' && isFinite(message.seconds)) command.seconds = message.seconds;
+    send(command);
+  }
+}
+
+function phoneHello(id, message) {
+  var phone = phones[id];
+  phone.name = String(message.name || 'An iPhone').slice(0, 60);
+  var paired = pairedPhones();
+  if (message.token && paired[message.token]) return admit(id);
+  var now = Date.now();
+  if (now < pairLockedUntil) return toPhone(id, { event: 'pairingRefused', triesLeft: 0, wait: Math.ceil((pairLockedUntil - now) / 1000) });
+  if (message.code && pairing && now < pairing.until) {
+    if (String(message.code) === pairing.code) {
+      hidePairing();
+      var token = newToken();
+      paired[token] = phone.name;
+      // At most 8 phones; the oldest goes first.
+      var tokens = Object.keys(paired);
+      while (tokens.length > 8) delete paired[tokens.shift()];
+      localStorage.setItem('phones', JSON.stringify(paired));
+      toPhone(id, { event: 'paired', token: token });
+      return admit(id);
+    }
+    if (--pairing.tries <= 0) {
+      hidePairing();
+      pairLockedUntil = now + 30000;
+      return toPhone(id, { event: 'pairingRefused', triesLeft: 0, wait: 30 });
+    }
+    return toPhone(id, { event: 'pairingRefused', triesLeft: pairing.tries });
+  }
+  showPairing(phone.name);
+  toPhone(id, { event: 'needsPairing', enterCode: true });
+}
+
+function collectPhones() {
+  if (!state.phoneIn) return;
+  var event;
+  while ((event = Module._tc_remote_event())) {
+    if (event > 0) phones[event] = { trusted: false, name: 'An iPhone' };
+    else delete phones[-event];
+  }
+  var size;
+  while ((size = Module._tc_remote_next()) > 0) onPhone(Module._tc_remote_from(), Module.UTF8ToString(state.phoneIn));
+}
+
+// Once a second: the cast's state when it changes, and its numbers while it runs.
+function remoteReport(line) {
+  if (!state.phoneIn) return;
+  var now = castState();
+  if (now !== lastCastState) {
+    lastCastState = now;
+    toPhones({ event: 'state', state: now });
+  }
+  if (now === 'casting') toPhones({ event: 'stats', fps: line.fps, mbps: line.mbps });
+}
+
 document.addEventListener('keydown', function (event) {
   if (event.keyCode === 10009) {
     stopDirect();
     try { tizen.application.getCurrentApplication().exit(); } catch (e) { window.close(); }
   } else if (event.keyCode === 13 || event.keyCode === 457) {
     dom.hud.hidden = !dom.hud.hidden;
+  } else if (event.keyCode === 403 && !state.socket) {
+    forgetPhones();
   }
 });
 
@@ -418,6 +612,8 @@ document.addEventListener('visibilitychange', function () {
 });
 
 try { webapis.appcommon.setScreenSaver(webapis.appcommon.AppCommonScreenSaverState.SCREEN_SAVER_OFF); } catch (e) {}
+try { tizen.tvinputdevice.registerKey('ColorF0Red'); } catch (e) {}
 setInterval(report, 1000);
+fetchTvInfo();
 requestAnimationFrame(pump);
 findMac();

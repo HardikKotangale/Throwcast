@@ -1,4 +1,4 @@
-import { captureTab, restartStream, setStreamVolume, startStream, stopStream, streamStats } from './stream.js';
+import { captureTab, restartStream, sendTabState, setStreamVolume, startStream, stopStream, streamStats } from './stream.js';
 // The page that captures a cast tab and streams it to the TV. The extension opens it for a cast and
 // closes it when the cast ends.
 
@@ -21,6 +21,7 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   }
   if (message?.type === 'streamStop') stopStream();
   if (message?.type === 'streamVolume') setStreamVolume(message.volume);
+  if (message?.type === 'streamTabState') sendTabState(message.state);
   if (message?.type === 'streamStats') {
     respond(streamStats());
     return false;

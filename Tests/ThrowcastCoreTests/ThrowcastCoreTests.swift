@@ -347,3 +347,60 @@ private extension Data {
         return units
     }
 }
+
+final class RemoteControlTests: XCTestCase {
+    private func store() -> TokenStore {
+        let defaults = UserDefaults(suiteName: "remote-tests-\(UUID().uuidString)")!
+        return TokenStore(defaults: defaults)
+    }
+
+    func testTokensAreRandomAndRemembered() {
+        let tokens = store()
+        let first = tokens.issue(for: "iPhone")
+        XCTAssertEqual(first.count, 64)
+        XCTAssertNotEqual(first, tokens.issue(for: "iPhone"))
+        XCTAssertTrue(tokens.contains(first))
+        XCTAssertFalse(tokens.contains("guess"))
+        tokens.forgetAll()
+        XCTAssertFalse(tokens.contains(first))
+    }
+
+    func testPhoneCantPlayLinksOrSeeTVFrames() {
+        XCTAssertFalse(RemoteControl.allowed.contains("play"))
+        XCTAssertFalse(RemoteControl.allowed.contains("uninstall"))
+        XCTAssertFalse(RemoteControl.forwarded.contains("tvFrame"))
+    }
+
+    /// Unpaired phones get nothing; a paired one is welcomed and its commands reach the engine.
+    func testOnlyPairedPhonesDriveTheEngine() throws {
+        let tokens = store()
+        let token = tokens.issue(for: "Test")
+        let remote = RemoteControl(tokens: tokens, port: 47199)
+        let commanded = expectation(description: "command")
+        remote.onCommand = { message in if message["cmd"] as? String == "stop" { commanded.fulfill() } }
+        remote.snapshot = { [["event": "state", "state": "stopped"]] }
+        try remote.start()
+        defer { remote.stop() }
+        Thread.sleep(forTimeInterval: 0.3)
+
+        let socket = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:47199")!)
+        socket.resume()
+        func next() throws -> [String: Any] {
+            let got = expectation(description: "message")
+            var result: [String: Any] = [:]
+            socket.receive { if case let .success(.string(text)) = $0 { result = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] ?? [:] }; got.fulfill() }
+            wait(for: [got], timeout: 3)
+            return result
+        }
+        func send(_ object: [String: Any]) { socket.send(.string(String(decoding: try! JSONSerialization.data(withJSONObject: object), as: UTF8.self))) { _ in } }
+
+        send(["cmd": "stop"])
+        XCTAssertEqual(try next()["event"] as? String, "needsPairing")
+        send(["cmd": "hello", "token": token, "name": "Test"])
+        XCTAssertEqual(try next()["event"] as? String, "welcome")
+        XCTAssertEqual(try next()["event"] as? String, "state")
+        send(["cmd": "stop"])
+        wait(for: [commanded], timeout: 3)
+        socket.cancel()
+    }
+}

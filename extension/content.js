@@ -243,6 +243,104 @@ function fitStyle(element) {
   };
 }
 
+// Sites draw subtitles as page elements over the video, so they stay behind a video lifted into the top
+// layer. This copies whatever the site's subtitles say into a layer of its own just above the video.
+// Subtitles inside the video itself (<track>) already come along.
+const CAPTIONS = 'throwcast-captions';
+const CAPTION_SOURCES = [
+  '.ytp-caption-window-container',            // YouTube
+  '.player-timedtext',                        // Netflix
+  '.atvwebplayersdk-captions-text',           // Prime Video
+  '.dss-subtitle-renderer-cue-window',        // Disney+
+  '.vjs-text-track-display',                  // Video.js players
+  '.jw-captions',                             // JW Player
+  '.plyr__captions',                          // Plyr
+  '.shaka-text-container',                    // Shaka
+  '[class*="subtitle" i]:not(#throwcast-captions)',
+  '[class*="caption" i]:not(#throwcast-captions)',
+];
+let captionLayer;
+let captionTimer;
+let raiseCaptions = false;
+
+// innerText is empty for anything the page isn't drawing, and a site may stop drawing its own subtitles
+// once its video is lifted out, so lines are read from the text itself.
+function linesOf(element) {
+  const youtube = element.querySelectorAll('.caption-visual-line');
+  if (youtube.length) return [...youtube].map((line) => line.textContent.trim()).filter(Boolean).join('\n');
+  const drawn = (element.innerText ?? '').trim();
+  if (drawn) return drawn;
+  const blocks = [...element.querySelectorAll('div, p, span')].filter((child) => !child.querySelector('div, p, span'));
+  return (blocks.length ? blocks.map((child) => child.textContent.trim()).filter(Boolean).join('\n') : element.textContent.trim());
+}
+
+function captionText() {
+  // Subtitles the browser draws from the video's own tracks, when the site uses them hidden.
+  const video = fitted?.tagName === 'VIDEO' ? fitted : null;
+  for (const track of video?.textTracks ?? []) {
+    if (track.mode === 'hidden' && track.activeCues?.length) return [...track.activeCues].map((cue) => cue.text?.replace(/<[^>]+>/g, '') ?? '').join('\n').trim();
+  }
+  for (const selector of CAPTION_SOURCES) {
+    for (const element of document.querySelectorAll(selector)) {
+      if (element.id === CAPTIONS || element.closest?.(`#${CAPTIONS}`)) continue;
+      const text = linesOf(element);
+      // Real subtitles are a line or three; a long block is a menu or a description.
+      if (text && text.length < 400 && !element.querySelector('input, button, select')) return text;
+    }
+  }
+  return '';
+}
+
+function showCaptions() {
+  if (!fitted || fitted.tagName !== 'VIDEO') return hideCaptions();
+  if (!captionLayer?.isConnected) {
+    captionLayer = document.createElement('div');
+    captionLayer.id = CAPTIONS;
+    captionLayer.setAttribute('popover', 'manual');
+    captionLayer.setAttribute('aria-hidden', 'true');
+    captionLayer.setAttribute('style', [
+      'position:fixed', 'inset:auto 0 6vh 0', 'margin:0 auto', 'padding:0', 'border:0', 'background:transparent',
+      'width:100vw', 'max-width:none', 'height:auto', 'overflow:visible', 'pointer-events:none', 'text-align:center',
+      'z-index:2147483647',
+    ].map((rule) => `${rule} !important`).join(';'));
+    document.documentElement.append(captionLayer);
+  }
+  const text = captionText();
+  if (captionLayer.dataset.text !== text) {
+    captionLayer.dataset.text = text;
+    captionLayer.replaceChildren(...text.split('\n').filter(Boolean).map((line) => {
+      const span = document.createElement('span');
+      span.textContent = line;
+      span.setAttribute('style', 'display:inline-block;margin:0.15em auto 0;padding:0.1em 0.4em;background:rgba(0,0,0,0.75);color:#fff;'
+        + 'font:500 3.4vh/1.3 system-ui,-apple-system,sans-serif;border-radius:0.2em;white-space:pre-wrap');
+      const row = document.createElement('div');
+      row.append(span);
+      return row;
+    }));
+  }
+  // The top layer stacks in the order things are shown. Players re-show their video now and then, so the
+  // subtitles are shown again after it whenever it isn't already the last thing on top.
+  try {
+    if (!text) captionLayer.hidePopover();
+    else {
+      if (raiseCaptions || !captionLayer.matches(':popover-open')) {
+        if (captionLayer.matches(':popover-open')) captionLayer.hidePopover();
+        captionLayer.showPopover();
+        raiseCaptions = false;
+      }
+    }
+  } catch {}
+  captionTimer ??= setInterval(showCaptions, 200);
+}
+
+function hideCaptions() {
+  clearInterval(captionTimer);
+  captionTimer = undefined;
+  try { captionLayer?.hidePopover(); } catch {}
+  captionLayer?.remove();
+  captionLayer = undefined;
+}
+
 // The top layer draws above everything on the page at full size, whatever transforms, frames
 // or stacking the site uses, and unlike fullscreen it needs no click.
 function applyFit() {
@@ -262,14 +360,19 @@ function applyFit() {
     target.dataset.throwcastPopover = '';
   }
   try {
-    if (!target.matches(':popover-open')) target.showPopover();
+    if (!target.matches(':popover-open')) {
+      target.showPopover();
+      raiseCaptions = true;
+    }
   } catch {}
   // Players resize their video as they go. Put the fit back the moment they do.
   guard = new MutationObserver(() => applyFit());
   guard.observe(target, { attributes: true, attributeFilter: ['style', 'popover', 'class'] });
+  showCaptions();
 }
 
 function release() {
+  hideCaptions();
   guard?.disconnect();
   guard = undefined;
   const element = fitted;
@@ -400,6 +503,16 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     if (stream) youtube({ live: true });
     else video.currentTime = liveEdge(video) - 1;
   }
+  // The next or previous video, with the site's own buttons (YouTube, Netflix and most players label them).
+  if (message === 'next' || message === 'previous') {
+    const next = message === 'next';
+    const button = document.querySelector(next
+      ? '.ytp-next-button, [data-uia="control-next"], [data-testid*="next" i], button[aria-label^="Next" i], button[title^="Next" i]'
+      : '.ytp-prev-button, [data-uia="control-previous"], [data-testid*="previous" i], button[aria-label^="Previous" i], button[title^="Previous" i]');
+    if (button && !button.disabled && button.getAttribute('aria-disabled') !== 'true') button.click();
+    else if (next) document.dispatchEvent(new KeyboardEvent('keydown', { key: 'N', code: 'KeyN', shiftKey: true, bubbles: true }));
+    else video.currentTime = 0;
+  }
 
   if (message === 'describe') {
     const src = video.currentSrc || video.src || '';
@@ -408,9 +521,22 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   return false;
 });
 
+// The whole screen is on the TV: report what's playing so the app and the phone can control it, and
+// leave the page and full screen alone, since the TV shows the screen exactly as it is.
+function watchScreen() {
+  if (watching || size) return;
+  castKind = 'screen';
+  reporting ??= setInterval(report, 500);
+}
+
 function castCheck() {
   toExtension({ type: 'castCheck' }).then((mode) => {
-    if (mode === 'window' || mode === 'tab') watch(mode);
+    if (mode === 'screen') watchScreen();
+    else if (castKind === 'screen' && !mode) {
+      clearInterval(reporting);
+      reporting = undefined;
+      castKind = null;
+    } else if (mode === 'window' || mode === 'tab') watch(mode);
     else if (mode) fit(mode);
     else unwatch();
   });

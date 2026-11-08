@@ -296,7 +296,9 @@ class _HomePageState extends State<HomePage> {
         _startCast();
       }
     };
+    engine.onRemoteSetting = _remoteSetting;
     engine.start();
+    _shareSettings();
     if (menuBar) setMenuBarIcon(true);
     if (menuBar && !dockIcon) setDockIcon(false);
     // The TV from last time doesn't need a search, only a quick hello.
@@ -367,7 +369,63 @@ class _HomePageState extends State<HomePage> {
     orElse: () => resolutions.last,
   );
 
-  void _save() => SavedSettings.save({
+  void _save() {
+    _saveNow();
+    _shareSettings();
+  }
+
+  /// Everything the window can change, for the iPhone remote, so it shows and changes the same settings.
+  void _shareSettings() => engine.send({
+    'cmd': 'appSettings',
+    'quality': quality,
+    'height': resolution.height,
+    'resolutions': [for (final r in resolutions) {'height': r.height, 'title': r.title}],
+    'bitrate': bitrate,
+    'bitrates': bitratePresets.keys.toList(),
+    'fps': fps,
+    'playback': playback,
+    'udp': udp,
+    'codec': codec,
+    'codecs': engine.codecs,
+    'tenBit': tenBit,
+    'profile': profile,
+    'profiles': [for (final p in allProfiles.entries) {'id': p.key, 'title': p.value.title}],
+    'volume': castVolume,
+    'look': look.toJson(),
+  });
+
+  /// A change from the iPhone remote, through the same paths as a click here, so the window shows it too.
+  void _remoteSetting(String name, Object? value) {
+    switch (name) {
+      case 'quality' when value is String && qualities.containsKey(value):
+        _useQuality(value);
+      case 'height' when value is int && resolutions.any((r) => r.height == value):
+        change(() => pickedHeight = value);
+      case 'bitrate' when value is int && value >= 5 && value <= 100:
+        _useBitrate(value);
+      case 'fps' when value is int && const [24, 30, 60, 120].contains(value):
+        change(() => fps = value);
+      case 'playback' when value is String && playbacks.containsKey(value):
+        change(() => playback = value);
+      case 'udp' when value is bool:
+        change(() => udp = value);
+      case 'codec' when value is String && engine.codecs.contains(value):
+        change(() => codec = value);
+      case 'tenBit' when value is bool:
+        change(() => tenBit = value);
+      case 'profile' when value is String && allProfiles.containsKey(value):
+        _chooseProfile(value);
+      case 'volume' when value is num:
+        final level = value.toDouble().clamp(0.0, 1.0);
+        setState(() => castVolume = level);
+        engine.send({'cmd': 'volume', 'volume': level});
+        _save();
+      case 'look' when value is Map:
+        _adjust(Look.fromJson(Map<String, dynamic>.from(value)));
+    }
+  }
+
+  void _saveNow() => SavedSettings.save({
     'source': source.name,
     'height': pickedHeight,
     'profile': profile,
@@ -1618,6 +1676,51 @@ class _HomePageState extends State<HomePage> {
             ),
             _connectionRow(),
           ],
+        ),
+        const SizedBox(height: 24),
+        const SectionLabel(
+          'iPhone Remote',
+          badge: IconBadge(CupertinoIcons.device_phone_portrait, CupertinoColors.systemBlue),
+        ),
+        Group(
+          children: [
+            if (engine.phones.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                child: Caption('No iPhone paired yet.'),
+              ),
+            for (final phone in engine.phones)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                child: Row(
+                  children: [
+                    Icon(
+                      CupertinoIcons.circle_fill,
+                      size: 8,
+                      color: phone.connected
+                          ? CupertinoColors.systemGreen.resolveFrom(context)
+                          : CupertinoColors.systemGrey.resolveFrom(context),
+                    ),
+                    const SizedBox(width: 9),
+                    Expanded(child: Text(phone.name, overflow: TextOverflow.ellipsis)),
+                    Text(
+                      phone.connected ? 'Connected' : 'Paired',
+                      style: TextStyle(fontSize: 13, color: context.secondary),
+                    ),
+                    const SizedBox(width: 10),
+                    SmallButton(
+                      'Forget',
+                      onTap: () => engine.send({'cmd': 'forgetPhone', 'id': phone.id}),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        const Caption(
+          'To pair, open Throwcast Remote on your iPhone: it shows a code, and this Mac asks to allow it. '
+          'Forget disconnects a phone; next time it gets a new code.',
         ),
         const SizedBox(height: 24),
         const SectionLabel(

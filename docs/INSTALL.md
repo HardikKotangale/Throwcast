@@ -55,6 +55,29 @@ The new version replaces the old one; Developer Mode and the signing profile sta
 
 After an update, stop any cast, click **reload ↻** on the extension, and refresh the pages you'll cast.
 
+## 4. The iPhone remote (optional)
+
+Throwcast Remote controls casts from your phone. With the Mac app, it controls the Mac: start and stop, what to show, playback, and every setting. When the browser extension casts by itself, it controls the TV instead. It isn't in the DMG, because an iPhone only installs apps from the App Store, TestFlight or Xcode, so you build it once from the source.
+
+**You need:** a Mac with Xcode 16 or later, an iPhone on iOS 18 or later, a USB cable, and any Apple ID (a free one works).
+
+1. Open `ios/ThrowcastRemote.xcodeproj` in Xcode.
+2. Choose the **ThrowcastRemote** target > **Signing & Capabilities**. Set **Team** to your Apple ID (add it in **Xcode > Settings > Accounts** if it isn't listed). If Xcode says the bundle identifier is taken, change it to something of your own, such as `com.yourname.throwcast.remote`.
+3. Connect your iPhone, unlock it, and choose it as the run destination at the top of Xcode.
+4. Press **Run** (⌘R). The first time, the iPhone asks you to trust the developer: **Settings > General > VPN & Device Management**, then choose your Apple ID and **Trust**. Turn on **Developer Mode** too if the iPhone asks (**Settings > Privacy & Security > Developer Mode**).
+5. Open Throwcast Remote and allow **Local Network** when it asks.
+
+**Pairing**
+
+- **Mac:** open Throwcast on the Mac. The phone shows a 6-digit code, and the Mac asks whether to allow it; choose **Allow** if the codes match. Paired phones are listed in the Mac app under **Settings > iPhone Remote**, where **Forget** unpairs one.
+- **TV, for extension casts:** open Throwcast on the TV (it needs this version of the TV app). Choose the TV on the phone, then type the code the TV shows. The red button on the TV remote forgets all phones.
+
+**Good to know**
+
+- The iPhone, the Mac and the TV need to be on the same Wi-Fi.
+- With a free Apple ID, Xcode's build stops opening after **7 days**; press Run again to renew it. A free Apple ID can also have only 3 such apps on a phone at once.
+- **For video controls without the extension**, turn on **Allow JavaScript from Apple Events** in your browser once (Chrome, Brave, Edge and Arc: **View > Developer**; Safari: **Develop**), and allow Throwcast to control it when macOS asks.
+
 ## Using it
 
 - **Your Mac:** open Throwcast, choose **What to Show**, and press **Show on TV**.

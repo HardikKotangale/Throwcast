@@ -259,7 +259,7 @@ async function inCastWindow(tab) {
   if (!cast) windowCrop = '';
   const window = cast && (await chrome.windows.get(tab.windowId).catch(() => null));
   if (!window) return null;
-  return sameWindow(window, cast) ? window : null;
+  return sameWindow(window, cast, tab.title) ? window : null;
 }
 
 // --- Messages -------------------------------------------------------------------------------------------
@@ -268,15 +268,39 @@ async function inCastWindow(tab) {
 async function castMode(tab) {
   const { castingTab, pictureSize = 'cover' } = await chrome.storage.local.get(['castingTab', 'pictureSize']);
   if (castingTab?.tabId === tab?.id) return 'tab';
-  return (await inCastWindow(tab)) ? 'window' : null;
+  if (await inCastWindow(tab)) return 'window';
+  return (await onCastScreen(tab)) ? 'screen' : null;
+}
+
+/// The app is casting the whole screen, and this is the tab showing in the browser window used last:
+/// the one you're watching. Its playback is reported, but nothing on the page changes.
+async function onCastScreen(tab) {
+  if (!tab?.active || !(await appStatus())?.castScreen) return false;
+  const last = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
+  return last?.id === tab.windowId;
 }
 
 async function checkIn(state, tab) {
   const { castingTab, pictureSize = 'cover' } = await chrome.storage.local.get(['castingTab', 'pictureSize']);
-  // A cast tab's controls are in the extension, which asks the tab directly.
-  if (castingTab?.tabId === tab.id) return;
+  // A cast tab's controls are in the extension, which asks the tab directly. Its state also goes to the TV,
+  // for the iPhone remote.
+  if (castingTab?.tabId === tab.id) {
+    const saved = await chrome.storage.local.get(['castVolume', 'look', 'quality', 'bitrate', 'fps', 'delay']);
+    const settings = { look: saved.look ?? null, size: pictureSize, quality: saved.quality ?? '4k', bitrate: String(saved.bitrate ?? 'auto'), fps: saved.fps ?? 60, delay: saved.delay ?? 400 };
+    chrome.runtime.sendMessage({ type: 'streamTabState', state: { title: tab.title, time: state.time, duration: state.duration, paused: state.paused, live: state.live, behind: state.behind, volume: saved.castVolume ?? 1, settings } }).catch(() => {});
+    return;
+  }
   const window = await inCastWindow(tab);
-  if (!window) return chrome.tabs.sendMessage(tab.id, 'unfit').catch(() => {});
+  if (!window && !(await onCastScreen(tab))) return chrome.tabs.sendMessage(tab.id, 'unfit').catch(() => {});
+  if (!window) {
+    // A whole-screen cast: playback and controls only; the screen itself is what the TV shows.
+    const { commands = [] } = await post('/tabState', { title: tab.title, time: state.time, duration: state.duration, paused: state.paused, volume: state.volume, live: state.live, behind: state.behind, start: state.start, size: pictureSize });
+    for (const command of commands) {
+      if (command.stop) await post('/control', { action: 'stop' }).catch(() => {});
+      else runTabCommand(tab.id, command);
+    }
+    return;
+  }
   // While its video fills the page, the TV shows only the page; otherwise the whole window.
   const crop = state.filled ? pageCrop(window, tab) : { x: 0, y: 0, width: window.width, height: window.height };
   const cropKey = JSON.stringify(crop);
@@ -287,8 +311,61 @@ async function checkIn(state, tab) {
   const { commands = [] } = await post('/tabState', { title: tab.title, time: state.time, duration: state.duration, paused: state.paused, volume: state.volume, live: state.live, behind: state.behind, start: state.start, size: pictureSize });
   for (const command of commands) {
     if (command.stop) await post('/control', { action: 'stop' }).catch(() => {});
-    else if (command.action) chrome.tabs.sendMessage(tab.id, command.action === 'seek' ? { seek: command.seconds } : command.action === 'jump' ? { jump: command.seconds } : command.action).catch(() => {});
-    else if (command.volume !== undefined) chrome.tabs.sendMessage(tab.id, { volume: command.volume }).catch(() => {});
+    else runTabCommand(tab.id, command);
+  }
+}
+
+/// Play, pause, seek, jump or a volume, for the tab playing on the TV.
+function runTabCommand(tabId, command) {
+  if (command.action) chrome.tabs.sendMessage(tabId, command.action === 'seek' ? { seek: command.seconds } : command.action === 'jump' ? { jump: command.seconds } : command.action).catch(() => {});
+  else if (command.volume !== undefined) chrome.tabs.sendMessage(tabId, { volume: command.volume }).catch(() => {});
+}
+
+/// The iPhone remote, through the TV, during a cast from this browser alone. Checked here again: only
+/// playback controls and the cast's own volume, never anything that opens or plays a link.
+const LOOK_RANGES = { brightness: [-0.25, 0.25], contrast: [0.75, 1.25], saturation: [0, 2], warmth: [-1, 1], gamma: [0.8, 1.2] };
+const STREAM_VALUES = { quality: ['4k', '1440', '1080'], bitrate: ['auto', 20, 40, 60], fps: [60, 30], delay: [400, 100] };
+
+async function remoteCommand(command) {
+  const { castingTab } = await chrome.storage.local.get('castingTab');
+  if (!castingTab?.standalone) return;
+  if (command?.cmd === 'look' && command.look && typeof command.look === 'object') {
+    // The picture: each value kept inside the popup's own range.
+    const look = {};
+    for (const [key, [low, high]] of Object.entries(LOOK_RANGES)) {
+      const value = Number(command.look[key]);
+      look[key] = Number.isFinite(value) ? Math.min(high, Math.max(low, value)) : key === 'brightness' || key === 'warmth' ? 0 : 1;
+    }
+    await chrome.storage.local.set({ look });
+    chrome.tabs.sendMessage(castingTab.tabId, { look }).catch(() => {});
+    return;
+  }
+  if (command?.cmd === 'size' && ['contain', 'cover', 'fill'].includes(command.size)) {
+    await chrome.storage.local.set({ pictureSize: command.size });
+    chrome.tabs.sendMessage(castingTab.tabId, { fit: command.size }).catch(() => {});
+    return;
+  }
+  if (command?.cmd === 'stream' && command.changes && typeof command.changes === 'object') {
+    // Quality, bitrate, frame rate or delay: the stream starts again with them, as from the popup.
+    const changes = {};
+    for (const [name, allowed] of Object.entries(STREAM_VALUES)) {
+      if (command.changes[name] !== undefined && allowed.includes(command.changes[name])) changes[name] = command.changes[name];
+    }
+    if (!Object.keys(changes).length) return;
+    await chrome.storage.local.set(changes);
+    chrome.runtime.sendMessage({ type: 'streamRestart', changes }).catch(() => {});
+    return;
+  }
+  if (command?.cmd !== 'tabControl') return;
+  if (typeof command.volume === 'number') {
+    const level = Math.min(1, Math.max(0, command.volume));
+    await chrome.storage.local.set({ castVolume: level });
+    chrome.runtime.sendMessage({ type: 'streamVolume', volume: level }).catch(() => {});
+  } else if (['live', 'next', 'previous'].includes(command.action)) {
+    chrome.tabs.sendMessage(castingTab.tabId, command.action).catch(() => {});
+  } else if (['play', 'pause', 'seek', 'jump'].includes(command.action)) {
+    const seconds = Number.isFinite(command.seconds) ? command.seconds : undefined;
+    runTabCommand(castingTab.tabId, { action: command.action, seconds });
   }
 }
 
@@ -300,6 +377,10 @@ async function endCast() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (message?.type === 'remoteCommand' && !sender.tab) {
+    remoteCommand(message.command);
+    return false;
+  }
   if (message?.type === 'tabState' && sender.tab) {
     checkIn(message, sender.tab).catch(() => {});
     return false;

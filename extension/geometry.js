@@ -8,7 +8,17 @@ export function pageCrop(window, tab) {
 }
 
 /// A browser window is the one Throwcast shows with One Window: the same place and size, give or take.
-export function sameWindow(window, cast) {
+export function sameWindow(window, cast, tabTitle = '') {
   if (!window || !cast) return false;
-  return Math.abs(window.left - cast.x) + Math.abs(window.top - cast.y) + Math.abs(window.width - cast.width) + Math.abs(window.height - cast.height) < 80;
+  if (Math.abs(window.left - cast.x) + Math.abs(window.top - cast.y) + Math.abs(window.width - cast.width) + Math.abs(window.height - cast.height) < 80) return true;
+  // Fill, Keep Shape, full screen or a move can leave the sizes apart. A browser window's title is its
+  // showing tab's, so a matching title is the same window whatever its shape.
+  return sameTitle(cast.title, tabTitle);
+}
+
+export function sameTitle(windowTitle, tabTitle) {
+  const clean = (text) => String(text ?? '').replace(/^\(\d+\)\s*/, '').trim().toLowerCase();
+  const a = clean(windowTitle), b = clean(tabTitle);
+  if (a.length < 3 || b.length < 3) return false;
+  return a === b || a.startsWith(b) || b.startsWith(a);
 }

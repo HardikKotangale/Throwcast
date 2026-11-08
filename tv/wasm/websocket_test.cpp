@@ -22,6 +22,18 @@ static std::vector<uint8_t> Masked(uint8_t first, const std::string& body) {
 }
 
 int main() {
+  {
+    // A phone's reader refuses anything over its limit, while the browser's default takes key frames.
+    std::vector<Message> out;
+    Reader phone(16);
+    const auto small = Masked(0x81, "{\"cmd\":\"stop\"}");
+    assert(phone.Add(small.data(), small.size(), out) && out.size() == 1);
+    Reader limited(16);
+    const auto big = Masked(0x81, std::string(17, 'x'));
+    assert(!limited.Add(big.data(), big.size(), out));
+    Reader browser;
+    assert(browser.Add(big.data(), big.size(), out));
+  }
   // The example from RFC 6455 section 1.3.
   const std::string request = "GET / HTTP/1.1\r\nHost: tv\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                               "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
