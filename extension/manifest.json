@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Throwcast",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Show any Chrome tab on your Samsung TV, in up to 4K at 60 FPS. No other app needed.",
   "minimum_chrome_version": "123",
   "permissions": [

@@ -89,6 +89,9 @@ struct Message {
 // and may split a message into a first frame and continuations.
 class Reader {
  public:
+  // `limit` caps one message: a phone's commands are tiny, a browser's key frames are not.
+  explicit Reader(size_t limit = kMaxMessage) : limit_(limit) {}
+
   // Takes bytes, and returns true while the stream is well formed. Finished messages go to `out`.
   bool Add(const uint8_t* bytes, size_t size, std::vector<Message>& out) {
     pending_.insert(pending_.end(), bytes, bytes + size);
@@ -112,7 +115,7 @@ class Reader {
         for (int i = 0; i < 8; ++i) length = length << 8 | p[2 + i];
         header = 10;
       }
-      if (!masked || length > kMaxMessage) return false;  // a browser always masks; anything else isn't one
+      if (!masked || length > limit_) return false;  // a browser always masks; anything else isn't one
       if (have < header + 4 + length) break;
       const uint8_t* mask = p + header;
       const uint8_t* body = mask + 4;
@@ -125,7 +128,7 @@ class Reader {
       const size_t base = into.size();
       into.resize(base + size_t(length));
       for (size_t i = 0; i < length; ++i) into[base + i] = body[i] ^ mask[i & 3];
-      if (into.size() > kMaxMessage) return false;
+      if (into.size() > limit_) return false;
       used += header + 4 + size_t(length);
       if (opcode >= 8) out.push_back({opcode, control_});
       else if (fin) {
@@ -143,6 +146,7 @@ class Reader {
  private:
   std::vector<uint8_t> pending_, partial_, control_;
   uint8_t partialOpcode_ = kBinary;
+  size_t limit_;
 };
 
 // One whole message from this server. Servers never mask.

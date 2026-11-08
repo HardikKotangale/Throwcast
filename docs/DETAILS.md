@@ -85,13 +85,16 @@ Nothing else has been tested: other Samsung models, other Macs, Windows, or Ethe
 - **Mac:** macOS 15 or later, on Apple silicon. Only tested on an M4 Pro.
 - **TV:** a Samsung TV from 2020 or later with Developer Mode. Only tested on the AU8000.
 - **Browser:** Chrome 123 or later, or Brave, for tab casting. For tab casting alone, that and the TV app are all you need; the Mac app is optional.
-- **Network:** the Mac and the TV on the same local network.
+- **iPhone (optional):** iOS 18 or later for Throwcast Remote, built with Xcode 16 or later.
+- **Network:** the Mac and the TV, and the iPhone if you use it, on the same local network.
 
 ## Permissions
 
 - **Screen Recording** is how the Mac app sees what to send. Nothing is saved.
 - **Local Network** lets it find the TV and stream to it.
 - **Accessibility** (optional) lets **One Window** resize a browser window you pick to the TV's shape while it's shown, and put it back afterwards. Without it, the window is shown at its own shape, with bars.
+- **Automation** (optional) lets the Mac app ask your browser what's playing during a screen or window cast, and control it. macOS asks once per browser, and the browser's own **Allow JavaScript from Apple Events** switch has to be on. Without it, play controls for browser video come only from the extension.
+- **Local Network on the iPhone** lets Throwcast Remote find the Mac and the TV.
 - **The extension** reads the page you cast so it can fill the TV and control the video, and captures only that tab's picture and sound. Chrome shows that the tab is shared while it does.
 
 ## Privacy
@@ -100,6 +103,9 @@ Throwcast has no account, no servers and no analytics. Everything stays between 
 
 - **The Mac app** sends the picture and sound only to the TV you chose, and only it may connect.
 - **The browser extension** runs on every site so it can find and fill the video on whichever tab you cast. It reads that page's video and its own settings. A cast tab's picture and sound go straight from Chrome to your TV over your own network; to find the TV, it asks the addresses on your Wi-Fi network for a Samsung TV. With the Throwcast Mac app open, it also talks to the app on this Mac. **Play on TV**, offered when a page has a plain video file or stream link, passes that address and the request details the site needs, including cookies, from your browser to the app, which uses them only to fetch that one video for your TV.
+
+- **The iPhone remote** talks only to the Mac and the TV on your network, and only after you pair it: the Mac asks you to allow it, or the TV shows a code to type. A paired phone keeps a token, in its Keychain and on the Mac or TV, and **Forget** in the Mac app's settings removes it. Phones get cast state, settings and what's playing, with window names and app icons but never window pictures or the TV picture. They can send only playback, setting and start/stop commands, never a link to play.
+- **Reading browser playback:** during a screen or window cast, the Mac app asks the browser you used last for the title, time and state of the video in its showing tab, twice a second. Nothing is stored or sent anywhere but your phone.
 
 ## Responsible use
 
@@ -115,9 +121,26 @@ What it can't do, because a browser can't:
 - **H.264, standard range.** HEVC, 10-bit and HDR need the Mac app.
 - **TCP only.** A Chrome extension can't send UDP, and this TV's browser couldn't carry WebRTC, so the Mac app keeps the UDP option.
 
+## The iPhone remote
+
+Throwcast Remote is a SwiftUI app in `ios/`.
+
+- **With the Mac app**, it connects to a WebSocket the app opens on port 47126, found with Bonjour as `_throwcast._tcp`. The Mac app's window shares its settings with the phone, and a change on the phone is applied by the window as if it were clicked there, so both always agree. A running cast restarts when a setting needs it.
+- **With only the extension**, the TV is the control point. The TV app opens its own WebSocket on the first free port of 47150–47159, apart from the extension's 47140–47149. The phone finds the TV by asking Samsung's service on port 8001 whether Throwcast is running: first at TVs it already knows, then across the Wi-Fi. The TV passes playback state up from the extension and the phone's commands down to it, checking each against an allow-list.
+- **Pairing:** with the Mac, the phone shows a 6-digit code and the Mac asks; with the TV, the TV shows the code and the phone types it (3 tries, then a 30-second wait).
+- **The TV reloads after every cast** and every stream change, so the phone drops for a moment and reconnects by itself.
+
+It isn't in the DMG, because an iPhone installs apps only from the App Store, TestFlight or Xcode ([build it](INSTALL.md#4-the-iphone-remote-optional)).
+
+## Video in your browser, without the extension
+
+During a screen or window cast, the Mac app reads the video in the browser you used last through AppleScript: Chrome, Brave, Edge, Arc or Safari. It runs a few lines in the showing tab twice a second, picking the biggest video, preferring one that's playing, as the extension does, and reads its title, time, length, volume and whether it's live. YouTube live is recognized from YouTube's own live markers, with its rewind window. Play, pause, seek, ±10 s, volume, next, previous and LIVE then work from the Mac app and the phone. When the extension is installed and reporting, it keeps the controls.
+
+It needs **Allow JavaScript from Apple Events** turned on once in the browser (Chrome, Brave, Edge and Arc: **View > Developer**; Safari: **Develop**), and Throwcast allowed under **System Settings > Privacy & Security > Automation**. It reads only the top of the page, so a video embedded from another site inside a frame isn't seen.
+
 ## Limits
 
-- **Unencrypted stream:** anyone who can capture traffic on your network could see it, so don't cast private content on a shared network. The Mac app and the extension only stream to the TV you chose.
+- **Unencrypted stream:** anyone who can capture traffic on your network could see it, so don't cast private content on a shared network. The Mac app and the extension only stream to the TV you chose. The iPhone remote's connection is unencrypted too, though it carries only controls and settings, and needs pairing.
 - **One TV at a time, and one sender per TV.** Whoever connects first, a Mac app or a browser, keeps the TV until its cast ends. Another that tries meanwhile is refused, and the cast already playing isn't interrupted: a second Mac says the TV didn't connect after 25 seconds.
 - **Protected video:** DRM video from some services usually shows black.
 - **Mission Control:** the TV holds the last picture until it closes, while the sound keeps playing.

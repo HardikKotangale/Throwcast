@@ -42,5 +42,14 @@ tv/app/.sign/
 .env
 .env.*
 
-# Private notes, kept out of the public repo
-docs/ARCHITECTURE.md
+
+
+
+# iPhone remote (Xcode): build output and per-user state; the project itself is committed
+ios/build/
+ios/**/xcuserdata/
+ios/**/*.xcuserstate
+ios/**/project.xcworkspace/xcuserdata/
+*.ipa
+*.dSYM/
+*.dSYM.zip

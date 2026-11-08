@@ -37,9 +37,12 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Throwcast finds your TV and streams your screen to it over your local network.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Throwcast reads what's playing in your browser during a cast, so you can control it from Throwcast and your iPhone.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_samsungmsf._tcp</string>
+		<string>_throwcast._tcp</string>
 	</array>
 </dict>
 </plist>

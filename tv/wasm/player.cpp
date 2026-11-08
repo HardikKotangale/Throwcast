@@ -10,6 +10,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <deque>
@@ -328,6 +329,124 @@ void* ListenForBrowser(void*) {
   return nullptr;
 }
 
+// The iPhone remote, for a cast from the browser extension alone (with the Mac app, the phone talks to the
+// Mac). Its own ports, so the extension, which takes the first WebSocket in 47140-47149, never lands here.
+// Up to 3 phones on this one thread. Text only, and small: the page decides who is paired and what's allowed.
+constexpr uint16_t kPhonePort = 47150, kPhonePorts = 10;
+constexpr size_t kPhoneMax = 16 * 1024;
+constexpr int kMaxPhones = 3;
+std::atomic<int> g_phonePort{0};
+std::mutex g_phoneLock;
+std::deque<std::pair<int, std::string>> g_phoneIn;   // (phone, text), for the page
+std::deque<std::pair<int, std::string>> g_phoneOut;  // (phone, text), for the phones
+std::deque<int> g_phoneEvents;                       // +id connected, -id gone
+std::deque<int> g_phoneDrops;                        // phones the page wants gone
+char* g_phoneBuffer;
+int g_phoneFrom;
+
+struct Phone {
+  int fd, id;
+  throwcast::ws::Reader reader{kPhoneMax};
+};
+
+// The opening request, within a second. A phone on the LAN answers in milliseconds.
+bool PhoneHandshake(int fd) {
+  timeval wait{0, 20000};
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof wait);
+  std::string request;
+  char chunk[2048];
+  const double deadline = emscripten_get_now() + 1000;
+  while (request.find("\r\n\r\n") == std::string::npos && request.size() < 8192 && emscripten_get_now() < deadline) {
+    const ssize_t n = recv(fd, chunk, sizeof chunk, 0);
+    if (n > 0) request.append(chunk, size_t(n));
+    else if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) return false;
+  }
+  const std::string reply = throwcast::ws::HandshakeReply(request);
+  return !reply.empty() && SendAll(fd, std::vector<uint8_t>(reply.begin(), reply.end()));
+}
+
+void* ListenForPhones(void*) {
+  using namespace throwcast::ws;
+  const int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return nullptr;
+  int reuse = 1;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof reuse);
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_ANY);
+  uint16_t port = kPhonePort;
+  for (; port < kPhonePort + kPhonePorts; ++port) {
+    address.sin_port = htons(port);
+    if (bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof address) == 0) break;
+  }
+  if (port == kPhonePort + kPhonePorts || listen(fd, 4) != 0) return nullptr;
+  // Short waits everywhere: one thread takes new phones and serves the connected ones in turn.
+  timeval wait{0, 5000};
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof wait);
+  g_phonePort = port;
+  std::vector<Phone> phones;
+  int nextId = 1;
+  std::vector<uint8_t> buffer(16 * 1024);
+  std::vector<Message> got;
+  auto drop = [&](size_t index) {
+    close(phones[index].fd);
+    std::lock_guard<std::mutex> hold(g_phoneLock);
+    g_phoneEvents.push_back(-phones[index].id);
+    phones.erase(phones.begin() + long(index));
+  };
+  while (!g_wsStop) {
+    const int client = accept(fd, nullptr, nullptr);
+    if (client >= 0) {
+      if (int(phones.size()) >= kMaxPhones || !PhoneHandshake(client)) {
+        close(client);
+      } else {
+        timeval quick{0, 2000};
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &quick, sizeof quick);
+        phones.push_back(Phone{client, nextId++});
+        std::lock_guard<std::mutex> hold(g_phoneLock);
+        g_phoneEvents.push_back(phones.back().id);
+      }
+    }
+    std::deque<std::pair<int, std::string>> out;
+    std::deque<int> drops;
+    {
+      std::lock_guard<std::mutex> hold(g_phoneLock);
+      out.swap(g_phoneOut);
+      drops.swap(g_phoneDrops);
+    }
+    for (size_t i = phones.size(); i-- > 0;) {
+      Phone& phone = phones[i];
+      bool open = std::find(drops.begin(), drops.end(), phone.id) == drops.end();
+      for (const auto& item : out) {
+        if (open && item.first == phone.id)
+          open = SendAll(phone.fd, Frame(kText, reinterpret_cast<const uint8_t*>(item.second.data()), item.second.size()));
+      }
+      if (open) {
+        const ssize_t n = recv(phone.fd, buffer.data(), buffer.size(), 0);
+        if (n == 0) open = false;
+        else if (n < 0) open = errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+        else {
+          got.clear();
+          open = phone.reader.Add(buffer.data(), size_t(n), got);
+          for (Message& message : got) {
+            if (message.opcode == kPing) open = open && SendAll(phone.fd, Frame(kPong, message.data.data(), message.data.size()));
+            else if (message.opcode == kClose) open = false;
+            else if (message.opcode == kText) {
+              std::lock_guard<std::mutex> hold(g_phoneLock);
+              if (g_phoneIn.size() < 100) g_phoneIn.emplace_back(phone.id, std::string(message.data.begin(), message.data.end()));
+            }
+          }
+        }
+      }
+      if (!open) drop(i);
+    }
+  }
+  for (size_t i = phones.size(); i-- > 0;) drop(i);
+  close(fd);
+  g_phonePort = 0;
+  return nullptr;
+}
+
 }  // namespace
 
 extern "C" {
@@ -371,6 +490,53 @@ EMSCRIPTEN_KEEPALIVE void tc_ws_send(const char* text) {
 EMSCRIPTEN_KEEPALIVE void tc_ws_close() { g_wsDrop = true; }
 // Closes the listener and any browser, before the page reloads.
 EMSCRIPTEN_KEEPALIVE void tc_ws_stop() { g_wsStop = true; }
+
+// The iPhone remote's listener. Messages are copied to the returned buffer by tc_remote_next.
+EMSCRIPTEN_KEEPALIVE char* tc_remote_start() {
+  if (!g_phoneBuffer) {
+    g_phoneBuffer = new char[kPhoneMax + 1];
+    pthread_t thread;
+    pthread_create(&thread, nullptr, ListenForPhones, nullptr);
+    pthread_detach(thread);
+  }
+  return g_phoneBuffer;
+}
+
+EMSCRIPTEN_KEEPALIVE int tc_remote_port() { return g_phonePort; }
+
+// The next phone message, as text in the buffer: its size, or 0 when there's none. tc_remote_from says who sent it.
+EMSCRIPTEN_KEEPALIVE int tc_remote_next() {
+  std::lock_guard<std::mutex> hold(g_phoneLock);
+  if (g_phoneIn.empty()) return 0;
+  const std::string text = std::move(g_phoneIn.front().second);
+  g_phoneFrom = g_phoneIn.front().first;
+  g_phoneIn.pop_front();
+  const size_t size = std::min(text.size(), kPhoneMax);
+  std::memcpy(g_phoneBuffer, text.data(), size);
+  g_phoneBuffer[size] = 0;
+  return int(size);
+}
+
+EMSCRIPTEN_KEEPALIVE int tc_remote_from() { return g_phoneFrom; }
+
+// The next connect (+id) or disconnect (-id), or 0.
+EMSCRIPTEN_KEEPALIVE int tc_remote_event() {
+  std::lock_guard<std::mutex> hold(g_phoneLock);
+  if (g_phoneEvents.empty()) return 0;
+  const int event = g_phoneEvents.front();
+  g_phoneEvents.pop_front();
+  return event;
+}
+
+EMSCRIPTEN_KEEPALIVE void tc_remote_send(int phone, const char* text) {
+  std::lock_guard<std::mutex> hold(g_phoneLock);
+  if (g_phoneOut.size() < 400) g_phoneOut.emplace_back(phone, text);
+}
+
+EMSCRIPTEN_KEEPALIVE void tc_remote_drop(int phone) {
+  std::lock_guard<std::mutex> hold(g_phoneLock);
+  g_phoneDrops.push_back(phone);
+}
 
 // Starts receiving the stream over UDP from `mac`, an IPv4 address in host byte order.
 EMSCRIPTEN_KEEPALIVE uint8_t* tc_udp_start(uint32_t mac, int delayMs) {

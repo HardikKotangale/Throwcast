@@ -106,6 +106,9 @@ class Engine extends ChangeNotifier {
   var tabPaused = false;
   var tabSize = 'cover';
 
+  /// iPhones paired as remotes: a short id, the phone's name, and whether it's connected now.
+  var phones = <({String id, String name, bool connected})>[];
+
   /// Nil until the tab reports a video.
   double? tabVolume;
 
@@ -126,6 +129,9 @@ class Engine extends ChangeNotifier {
   String? addressError;
   var screenAllowed = true;
   void Function()? onStopped;
+
+  /// A setting changed on the iPhone remote: the window applies it as if it were clicked here.
+  void Function(String name, Object? value)? onRemoteSetting;
   Timer? _permissionTimer;
 
   void start() {
@@ -158,6 +164,13 @@ class Engine extends ChangeNotifier {
         addressError = null;
       case 'addFailed':
         addressError = 'No Samsung TV answered at ${event['host']}.';
+      case 'remoteSetting':
+        onRemoteSetting?.call(event['name'] as String, event['value']);
+      case 'remotePhones':
+        phones = [
+          for (final p in event['phones'] as List)
+            (id: p['id'] as String, name: p['name'] as String, connected: p['connected'] == true),
+        ];
       case 'encoders':
         codecs = [for (final c in event['codecs'] as List) c as String];
       case 'tvFrame':

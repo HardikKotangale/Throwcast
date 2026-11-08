@@ -34,3 +34,13 @@ h1 { margin: 0 0 44px; font-size: 88px; font-weight: 600; letter-spacing: -0.02e
   border: 1px solid rgba(255, 255, 255, 0.14);
   font-size: 26px; line-height: 1.5; white-space: pre; letter-spacing: 0.01em;
 }
+
+/* The iPhone remote's pairing code: over the video, so it works mid-cast too. */
+#pair {
+  position: absolute; left: 50%; top: 50%; width: 900px; margin: -200px 0 0 -450px; padding: 44px 0 40px;
+  border-radius: 36px; background: rgba(10, 28, 73, 0.95); border: 1px solid rgba(255, 255, 255, 0.16);
+  text-align: center;
+}
+#pair-title { margin: 0 0 24px; font-size: 36px; font-weight: 500; }
+#pair-code { margin: 0 0 20px; font-size: 120px; font-weight: 600; letter-spacing: 0.12em; line-height: 1; }
+#pair-detail { margin: 0; font-size: 28px; color: #b6c2dc; }

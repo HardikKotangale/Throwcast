@@ -60,6 +60,10 @@ Throwcast ${VERSION}
 3. TV app: Samsung only installs apps signed for your own TV, so it's built from
    the source once. Follow "2. The TV app" in docs/INSTALL.md on the project page:
    https://github.com/HardikKotangale/Throwcast/blob/main/docs/INSTALL.md
+4. iPhone remote (optional): an iPhone can't install apps from a disk image, so it's
+   built from the source with Xcode and your own Apple ID. Follow "4. The iPhone
+   remote" in docs/INSTALL.md. It controls the Mac app, or the TV when the browser
+   extension casts by itself.
 
 Only tested on a Samsung AU8000 55" TV.
 EOF

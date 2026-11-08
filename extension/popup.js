@@ -538,3 +538,11 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, 1000);
+
+// The iPhone remote can change the cast's volume through the TV; an open popup follows it.
+chrome.storage.onChanged.addListener((changes) => {
+  if (!changes.castVolume || changingVolume) return;
+  castVolume = changes.castVolume.newValue ?? 1;
+  const slider = document.querySelector('#volume');
+  if (slider) slider.value = castVolume * 100;
+});

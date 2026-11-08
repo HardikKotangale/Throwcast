@@ -126,6 +126,9 @@ export async function startStream(settings, onEnd) {
       me.stats = message;
     } else if (message.type === 'error') {
       end(message.message || 'The TV couldn’t play the stream.');
+    } else if (message.type === 'remote') {
+      // The iPhone remote, through the TV. The extension checks the command again before acting on it.
+      chrome.runtime.sendMessage({ type: 'remoteCommand', command: message }).catch(() => {});
     }
   };
   socket.send(JSON.stringify({ type: 'throwcast', name: 'Chrome' }));
@@ -206,6 +209,23 @@ export async function startStream(settings, onEnd) {
 }
 
 export const streamStats = () => cast?.stats ?? null;
+
+let sentTabState = '';
+let sentTabStateAt = 0;
+
+/// What the cast tab is playing, for the iPhone remote through the TV: when it changes, or once a second.
+export function sendTabState(state) {
+  const socket = cast?.socket;
+  if (!cast?.ready || socket?.readyState !== WebSocket.OPEN) return;
+  const tab = { type: 'tabState', title: String(state.title ?? '').slice(0, 200), time: +state.time || 0, duration: +state.duration || 0,
+    paused: !!state.paused, live: !!state.live, behind: +state.behind || 0, volume: +state.volume, settings: state.settings ?? null };
+  const key = JSON.stringify({ ...tab, time: Math.round(tab.time) });
+  const now = performance.now();
+  if (key === sentTabState && now - sentTabStateAt < 1000) return;
+  sentTabState = key;
+  sentTabStateAt = now;
+  socket.send(JSON.stringify(tab));
+}
 
 /// The TV's volume, 0 to 1, straight away and for the rest of this cast.
 export function setStreamVolume(value) {
